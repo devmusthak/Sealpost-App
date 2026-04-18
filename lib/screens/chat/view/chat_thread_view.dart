@@ -3,8 +3,11 @@ import 'dart:math';
 
 import 'package:dio/dio.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:linkify/linkify.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart' hide Config;
 
@@ -13,8 +16,13 @@ import '../../../data/chat/chat_contact.dart';
 import '../../../data/chat/chat_message_dto.dart';
 import '../../../data/chat/chat_repository.dart';
 import '../../../data/chat/chat_thread_local_store.dart';
+import '../../../data/chat/chat_user.dart';
+import '../../../data/chat/link_preview_service.dart';
 import '../../../theme/app_theme.dart';
+import '../../../widgets/chat_action_dialog.dart';
+import '../../compose/view/compose_view.dart';
 import '../controller/chat_controller.dart';
+import '../widgets/chat_link_preview_card.dart';
 
 enum OutboundDelivery {
   sending,
@@ -139,6 +147,11 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
 
   /// Scroll-to-quote: one [GlobalKey] per loaded message id.
   final Map<String, GlobalKey> _messageAnchorKeys = {};
+
+  /// Brief light-blue pulse on the message we scrolled to (reply jump-to-quote).
+  Timer? _jumpHighlightTimer;
+  String? _jumpHighlightMessageId;
+  bool _jumpHighlightPulse = true;
 
   /// First server history fetch finished (success or error).
   bool _initialHistorySyncDone = false;
@@ -289,13 +302,48 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     return null;
   }
 
+  /// Clears any visible snack bars, then shows [snackBar] (avoids stacking).
+  void _showThreadSnackBar(SnackBar snackBar, [BuildContext? scaffoldContext]) {
+    final target = scaffoldContext ?? context;
+    if (!target.mounted) return;
+    final messenger = ScaffoldMessenger.of(target);
+    messenger.clearSnackBars();
+    messenger.showSnackBar(snackBar);
+  }
+
+  void _startJumpToQuoteHighlight(String messageId) {
+    _jumpHighlightTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _jumpHighlightMessageId = messageId;
+      _jumpHighlightPulse = true;
+    });
+    var tick = 0;
+    const maxTicks = 8;
+    _jumpHighlightTimer = Timer.periodic(const Duration(milliseconds: 280), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      tick++;
+      setState(() => _jumpHighlightPulse = tick.isOdd);
+      if (tick >= maxTicks) {
+        t.cancel();
+        setState(() {
+          _jumpHighlightMessageId = null;
+          _jumpHighlightPulse = true;
+        });
+      }
+    });
+  }
+
   /// [ListView.builder] does not keep off-screen items built, so [GlobalKey.currentContext]
   /// is often null for quoted messages. Scroll near the target first, then [ensureVisible].
   void _scrollToQuotedMessage(String targetId) {
     final resolved = _resolveQuoteTargetId(targetId);
     if (resolved == null) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      _showThreadSnackBar(
         SnackBar(
           content: Text(
             'That message is not in this chat yet',
@@ -322,6 +370,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             duration: const Duration(milliseconds: 340),
             curve: Curves.easeOutCubic,
           );
+          _startJumpToQuoteHighlight(resolved);
           return;
         }
 
@@ -409,7 +458,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       _applyReactionDto(dto);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      _showThreadSnackBar(
         SnackBar(
           content: Text(
             'Could not update reaction',
@@ -510,6 +559,298 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         },
       ),
     );
+  }
+
+  /// Same as chat home [ChatScreen] when opening a thread with a friend.
+  ChatContact _chatContactForFriendThread(ChatUser u) {
+    return ChatContact(
+      id: u.id,
+      name: u.name.isNotEmpty ? u.name : u.email,
+      email: u.email,
+      isOnline: u.isOnline,
+      lastSeenAt: null,
+      relationStatus: 'friends',
+      lastMessage: '',
+      timeLabel: '',
+      unreadCount: 0,
+    );
+  }
+
+  /// Same modal as chat home search user tap ([ChatScreen._showActionModal]).
+  Future<void> _showChatHomeStyleUserActionModal(ChatUser user) async {
+    if (!mounted) return;
+    final parentContext = context;
+    final subtitle =
+        '${user.name.isEmpty ? user.email : user.name}  ${user.isOnline ? '• Online' : '• Offline'}\n${user.email}';
+
+    await showDialog<void>(
+      context: parentContext,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withValues(alpha: 0.62),
+      builder: (dialogContext) {
+        switch (user.relationStatus) {
+          case 'request_received':
+            return ChatActionDialog(
+              title: 'Friend request',
+              subtitle: subtitle,
+              primaryText: 'Accept',
+              secondaryText: 'Close',
+              primaryFilled: true,
+              onPrimary: () async {
+                Navigator.of(dialogContext).pop();
+                await Get.find<ChatRepository>().acceptFriendRequest(user.id);
+                if (Get.isRegistered<ChatController>()) {
+                  await Get.find<ChatController>().refreshContacts();
+                }
+                if (!mounted || !parentContext.mounted) return;
+                _showThreadSnackBar(
+                  const SnackBar(content: Text('Friend request accepted')),
+                  parentContext,
+                );
+                await Navigator.of(parentContext).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) => ChatThreadScreen(
+                      contact: _chatContactForFriendThread(user),
+                    ),
+                  ),
+                );
+              },
+              onSecondary: () => Navigator.of(dialogContext).pop(),
+            );
+          case 'request_sent':
+            return ChatActionDialog(
+              title: 'Request pending',
+              subtitle: subtitle,
+              primaryText: 'Notify user',
+              secondaryText: 'Close',
+              primaryFilled: true,
+              onPrimary: () async {
+                Navigator.of(dialogContext).pop();
+                await Get.find<ChatRepository>().notifyFriendRequestUser(user.id);
+                if (!mounted || !parentContext.mounted) return;
+                _showThreadSnackBar(
+                  const SnackBar(content: Text('Notification sent')),
+                  parentContext,
+                );
+              },
+              onSecondary: () => Navigator.of(dialogContext).pop(),
+            );
+          case 'friends':
+            return ChatActionDialog(
+              title: 'Friends',
+              subtitle: subtitle,
+              primaryText: 'Open chat',
+              secondaryText: 'Close',
+              primaryFilled: true,
+              onPrimary: () {
+                Navigator.of(dialogContext).pop();
+                unawaited(
+                  Navigator.of(parentContext).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => ChatThreadScreen(
+                        contact: _chatContactForFriendThread(user),
+                      ),
+                    ),
+                  ),
+                );
+              },
+              onSecondary: () => Navigator.of(dialogContext).pop(),
+            );
+          case 'none':
+          default:
+            return ChatActionDialog(
+              title: 'Add friend',
+              subtitle: subtitle,
+              primaryText: 'Add friend',
+              secondaryText: 'Close',
+              primaryFilled: true,
+              onPrimary: () async {
+                Navigator.of(dialogContext).pop();
+                if (user.relationStatus != 'none') return;
+                await Get.find<ChatRepository>().sendFriendRequest(user.id);
+                if (Get.isRegistered<ChatController>()) {
+                  await Get.find<ChatController>().refreshContacts();
+                }
+                if (!mounted || !parentContext.mounted) return;
+                _showThreadSnackBar(
+                  const SnackBar(content: Text('Friend request sent')),
+                  parentContext,
+                );
+              },
+              onSecondary: () => Navigator.of(dialogContext).pop(),
+            );
+        }
+      },
+    );
+  }
+
+  Future<void> _openComposeToAddress(String to) async {
+    if (!mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ComposeScreen(
+          prefill: ComposePrefill(
+            toAddresses: [to.trim()],
+            subject: '',
+            body: '',
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _onMessageEmailTap(String rawEmail) async {
+    final email = rawEmail.trim();
+    if (email.isEmpty) return;
+    final normalized = email.toLowerCase();
+
+    final myEmail =
+        Get.find<AuthRepository>().session?.email.trim().toLowerCase() ?? '';
+    if (myEmail.isNotEmpty && normalized == myEmail) {
+      if (!mounted) return;
+      _showThreadSnackBar(
+        SnackBar(
+          content: Text(
+            'This is your email',
+            style: GoogleFonts.ptSans(),
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => PopScope(
+        canPop: false,
+        child: Center(
+          child: Container(
+            padding: const EdgeInsets.all(28),
+            decoration: BoxDecoration(
+              color: const Color(0xFF2A2A2A),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: const SizedBox(
+              width: 36,
+              height: 36,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final repo = Get.find<ChatRepository>();
+      final users = await repo.searchUsersByEmail(normalized);
+      if (!mounted) return;
+      Navigator.of(context).pop();
+
+      ChatUser? match;
+      for (final u in users) {
+        if (u.email.trim().toLowerCase() == normalized) {
+          match = u;
+          break;
+        }
+      }
+
+      if (match == null) {
+        await _openComposeToAddress(email);
+        return;
+      }
+
+      final user = match;
+      final display = user.name.isNotEmpty ? user.name : user.email;
+
+      await showModalBottomSheet<void>(
+        context: context,
+        backgroundColor: _ChatThreadColors.composerBar,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (ctx) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        display,
+                        style: GoogleFonts.ptSans(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, color: Colors.white54),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.mail_outline, color: Color(0xFF7DD3FC)),
+                title: Text(
+                  'Send email',
+                  style: GoogleFonts.ptSans(color: Colors.white, fontSize: 16),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  unawaited(_openComposeToAddress(user.email));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.chat_bubble_outline, color: Color(0xFF7DD3FC)),
+                title: Text(
+                  'Chat with $display',
+                  style: GoogleFonts.ptSans(color: Colors.white, fontSize: 16),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  unawaited(_openChatFromEmailUser(user));
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      );
+    } catch (_) {
+      if (mounted) Navigator.of(context).pop();
+      if (mounted) {
+        _showThreadSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not look up email',
+              style: GoogleFonts.ptSans(),
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _openChatFromEmailUser(ChatUser user) async {
+    if (!mounted) return;
+    if (user.relationStatus == 'friends') {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => ChatThreadScreen(
+            contact: _chatContactForFriendThread(user),
+          ),
+        ),
+      );
+      return;
+    }
+    await _showChatHomeStyleUserActionModal(user);
   }
 
   void _onSocketMessage(dynamic data) {
@@ -1062,6 +1403,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     _typingEmitDebounce?.cancel();
     _typingStopTimer?.cancel();
     _peerTypingClear?.cancel();
+    _jumpHighlightTimer?.cancel();
     _unbindSocket();
     _input.removeListener(_onInputChanged);
     _scroll.removeListener(_onScroll);
@@ -1127,6 +1469,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               myId: _myId,
               peerDisplayName: peerLabel,
               timeLabel: _formatTime(msg.createdAt),
+              jumpHighlightActive: _jumpHighlightMessageId == msg.id,
+              jumpHighlightPulse: _jumpHighlightPulse,
               onRetry: msg.outbound == OutboundDelivery.failed
                   ? () => unawaited(_retrySend(msg))
                   : null,
@@ -1145,6 +1489,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               onReactionSummaryTap: msg.reactions.isEmpty
                   ? null
                   : () => _showReactionDetailsSheet(msg, peer),
+              onEmailTap: _onMessageEmailTap,
             ),
           );
         },
@@ -1669,7 +2014,7 @@ class _SwipeToReplyWrap extends StatefulWidget {
 }
 
 class _SwipeToReplyWrapState extends State<_SwipeToReplyWrap>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   /// Rubber-band cap while dragging (visual only).
   static const double _maxRubber = 88;
 
@@ -2106,6 +2451,143 @@ class _ReactionDetailsSheetState extends State<_ReactionDetailsSheet> {
   }
 }
 
+/// Detects URLs, emails, and phone numbers; taps open the system handler.
+class _LinkifiedMessageBody extends StatefulWidget {
+  const _LinkifiedMessageBody({
+    required this.text,
+    required this.baseStyle,
+    this.onEmailTap,
+  });
+
+  final String text;
+  final TextStyle baseStyle;
+
+  /// When set, tapping an email runs this (e.g. in-app lookup) instead of `mailto:`.
+  final Future<void> Function(String email)? onEmailTap;
+
+  @override
+  State<_LinkifiedMessageBody> createState() => _LinkifiedMessageBodyState();
+}
+
+class _LinkifiedMessageBodyState extends State<_LinkifiedMessageBody> {
+  final List<TapGestureRecognizer> _recognizers = [];
+  List<InlineSpan> _spans = const [];
+
+  static const _linkColor = Color(0xFF7DD3FC);
+
+  static Future<void> _openLink(LinkableElement e) async {
+    final raw = e.url.trim();
+    if (raw.isEmpty) return;
+    Uri? uri = Uri.tryParse(raw);
+    if (uri == null && raw.toLowerCase().startsWith('tel:')) {
+      final n = raw.substring(4).replaceAll(RegExp(r'[\s\-]'), '');
+      if (n.isNotEmpty) {
+        uri = Uri(scheme: 'tel', path: n);
+      }
+    }
+    if (uri == null) return;
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {}
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _rebuildSpans();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LinkifiedMessageBody oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text != widget.text ||
+        oldWidget.onEmailTap != widget.onEmailTap) {
+      _rebuildSpans();
+    }
+  }
+
+  void _rebuildSpans() {
+    for (final r in _recognizers) {
+      r.dispose();
+    }
+    _recognizers.clear();
+
+    if (widget.text.isEmpty) {
+      _spans = [TextSpan(text: '', style: widget.baseStyle)];
+      return;
+    }
+
+    final linkStyle = widget.baseStyle.copyWith(
+      color: _linkColor,
+      decoration: TextDecoration.underline,
+      decorationColor: _linkColor,
+    );
+
+    // Email before URL: loose URLs can treat "user@host.tld" as a hostname and prepend https://.
+    final elements = linkify(
+      widget.text,
+      linkifiers: const [
+        EmailLinkifier(),
+        UrlLinkifier(),
+        PhoneNumberLinkifier(),
+      ],
+      options: const LinkifyOptions(
+        humanize: false,
+        looseUrl: true,
+        defaultToHttps: true,
+        excludeLastPeriod: true,
+      ),
+    );
+
+    final out = <InlineSpan>[];
+    for (final e in elements) {
+      if (e is TextElement) {
+        out.add(TextSpan(text: e.text, style: widget.baseStyle));
+      } else if (e is EmailElement && widget.onEmailTap != null) {
+        final mail = e.emailAddress;
+        final recognizer = TapGestureRecognizer()
+          ..onTap = () => unawaited(widget.onEmailTap!(mail));
+        _recognizers.add(recognizer);
+        out.add(
+          TextSpan(
+            text: e.text,
+            style: linkStyle,
+            recognizer: recognizer,
+          ),
+        );
+      } else if (e is LinkableElement) {
+        final link = e;
+        final recognizer = TapGestureRecognizer()..onTap = () => _openLink(link);
+        _recognizers.add(recognizer);
+        out.add(
+          TextSpan(
+            text: link.text,
+            style: linkStyle,
+            recognizer: recognizer,
+          ),
+        );
+      }
+    }
+    _spans = out;
+  }
+
+  @override
+  void dispose() {
+    for (final r in _recognizers) {
+      r.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Text.rich(
+      TextSpan(children: _spans),
+      style: widget.baseStyle,
+    );
+  }
+}
+
 class _OutboundTicks extends StatelessWidget {
   const _OutboundTicks({required this.state});
 
@@ -2144,22 +2626,30 @@ class _MessageBubble extends StatelessWidget {
     required this.myId,
     required this.peerDisplayName,
     required this.timeLabel,
+    this.jumpHighlightActive = false,
+    this.jumpHighlightPulse = true,
     this.onRetry,
     this.onSwipeReply,
     this.onReplyQuoteTap,
     this.onLongPressBubble,
     this.onReactionSummaryTap,
+    this.onEmailTap,
   });
 
   final _UiMsg msg;
   final String myId;
   final String peerDisplayName;
   final String timeLabel;
+  final bool jumpHighlightActive;
+  final bool jumpHighlightPulse;
   final VoidCallback? onRetry;
   final VoidCallback? onSwipeReply;
   final VoidCallback? onReplyQuoteTap;
   final VoidCallback? onLongPressBubble;
   final VoidCallback? onReactionSummaryTap;
+  final Future<void> Function(String email)? onEmailTap;
+
+  static const _jumpHighlightTint = Color(0xFF7DD3FC);
 
   static const _bodyStyle = TextStyle(
     color: _ChatThreadColors.bubbleText,
@@ -2247,6 +2737,7 @@ class _MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final outgoing = msg.senderId == myId;
+    final previewUrl = LinkPreviewService.extractFirstHttpUrl(msg.body);
     final meta = _metaStyle(context);
     final q = msg.replyTo;
     const baseRowBottom = 6.0;
@@ -2265,53 +2756,78 @@ class _MessageBubble extends StatelessWidget {
         behavior: HitTestBehavior.deferToChild,
         child: ClipPath(
           clipper: const _OutgoingBubbleClipper(),
-          child: ColoredBox(
-            color: _ChatThreadColors.outgoingBubble,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 18, 8),
-              child: IntrinsicWidth(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (q != null && !q.isEmpty) _inlineReplyStrip(q),
-                    Text(
-                      msg.body,
-                      style: GoogleFonts.ptSans(textStyle: _bodyStyle),
+          child: Stack(
+            fit: StackFit.passthrough,
+            children: [
+              const Positioned.fill(
+                child: ColoredBox(color: _ChatThreadColors.outgoingBubble),
+              ),
+              if (jumpHighlightActive)
+                Positioned.fill(
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 260),
+                    opacity: jumpHighlightPulse ? 1 : 0.5,
+                    child: ColoredBox(
+                      color: _jumpHighlightTint.withValues(alpha: 0.38),
                     ),
-                    const SizedBox(height: 4),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(timeLabel, style: meta),
-                        const SizedBox(width: 4),
-                        if (st == OutboundDelivery.failed && onRetry != null)
-                          InkWell(
-                            onTap: onRetry,
-                            child: Padding(
-                              padding: const EdgeInsets.only(left: 2),
-                              child: Text(
-                                'Retry',
-                                style: GoogleFonts.ptSans(
-                                  fontSize: 12,
-                                  color: const Color(0xFF7DD3FC),
-                                  fontWeight: FontWeight.w700,
+                  ),
+                ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 18, 8),
+                child: IntrinsicWidth(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (q != null && !q.isEmpty) _inlineReplyStrip(q),
+                      if (previewUrl != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: ChatLinkPreviewCard(
+                            key: ValueKey('lp:${msg.id}|$previewUrl'),
+                            url: previewUrl,
+                            isOutgoing: true,
+                          ),
+                        ),
+                      _LinkifiedMessageBody(
+                        text: msg.body,
+                        baseStyle: GoogleFonts.ptSans(textStyle: _bodyStyle),
+                        onEmailTap: onEmailTap,
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(timeLabel, style: meta),
+                          const SizedBox(width: 4),
+                          if (st == OutboundDelivery.failed && onRetry != null)
+                            InkWell(
+                              onTap: onRetry,
+                              child: Padding(
+                                padding: const EdgeInsets.only(left: 2),
+                                child: Text(
+                                  'Retry',
+                                  style: GoogleFonts.ptSans(
+                                    fontSize: 12,
+                                    color: const Color(0xFF7DD3FC),
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                               ),
+                            )
+                          else
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 0.5),
+                              child: _OutboundTicks(state: st),
                             ),
-                          )
-                        else
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 0.5),
-                            child: _OutboundTicks(state: st),
-                          ),
-                      ],
-                    ),
-                  ],
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
+            ],
           ),
         ),
       );
@@ -2353,31 +2869,56 @@ class _MessageBubble extends StatelessWidget {
       behavior: HitTestBehavior.deferToChild,
       child: ClipPath(
         clipper: const _IncomingBubbleClipper(),
-        child: ColoredBox(
-          color: _ChatThreadColors.incomingBubble,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
-            child: IntrinsicWidth(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (q != null && !q.isEmpty) _inlineReplyStrip(q),
-                  Text(
-                    msg.body,
-                    style: GoogleFonts.ptSans(textStyle: _bodyStyle),
+        child: Stack(
+          fit: StackFit.passthrough,
+          children: [
+            const Positioned.fill(
+              child: ColoredBox(color: _ChatThreadColors.incomingBubble),
+            ),
+            if (jumpHighlightActive)
+              Positioned.fill(
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 260),
+                  opacity: jumpHighlightPulse ? 1 : 0.5,
+                  child: ColoredBox(
+                    color: _jumpHighlightTint.withValues(alpha: 0.38),
                   ),
-                  const SizedBox(height: 5),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      Text(timeLabel, style: meta),
-                    ],
-                  ),
-                ],
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+              child: IntrinsicWidth(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (q != null && !q.isEmpty) _inlineReplyStrip(q),
+                    if (previewUrl != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: ChatLinkPreviewCard(
+                          key: ValueKey('lp:${msg.id}|$previewUrl'),
+                          url: previewUrl,
+                          isOutgoing: false,
+                        ),
+                      ),
+                    _LinkifiedMessageBody(
+                      text: msg.body,
+                      baseStyle: GoogleFonts.ptSans(textStyle: _bodyStyle),
+                      onEmailTap: onEmailTap,
+                    ),
+                    const SizedBox(height: 5),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Text(timeLabel, style: meta),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -2488,6 +3029,10 @@ class _ThreadComposerState extends State<_ThreadComposer> {
   @override
   Widget build(BuildContext context) {
     final hasText = _hasTypedText;
+    final composerPreviewUrl =
+        LinkPreviewService.extractFirstHttpUrl(widget.controller.text);
+    final composerPreviewMaxW =
+        (MediaQuery.sizeOf(context).width - 24).clamp(220.0, 400.0);
     return PopScope(
       canPop: !_emojiPanelOpen,
       onPopInvokedWithResult: (didPop, _) {
@@ -2510,6 +3055,20 @@ class _ThreadComposerState extends State<_ThreadComposer> {
               if (widget.replyBanner != null) ...[
                 widget.replyBanner!,
                 const SizedBox(height: 8),
+              ],
+              if (composerPreviewUrl != null) ...[
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: ChatLinkPreviewCard(
+                      key: ValueKey('composer-lp|$composerPreviewUrl'),
+                      url: composerPreviewUrl,
+                      isOutgoing: true,
+                      maxWidth: composerPreviewMaxW,
+                    ),
+                  ),
+                ),
               ],
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,

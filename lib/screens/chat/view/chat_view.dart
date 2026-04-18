@@ -10,7 +10,7 @@ import '../../../data/chat/chat_contact.dart';
 import '../../../data/chat/chat_repository.dart';
 import '../../../data/chat/chat_user.dart';
 import '../../../theme/app_theme.dart';
-import '../../../widgets/hex_header_background.dart';
+import '../../../widgets/chat_action_dialog.dart';
 import '../controller/chat_controller.dart';
 import 'chat_search_delegate.dart';
 import 'chat_thread_view.dart';
@@ -108,7 +108,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       builder: (dialogContext) {
         switch (user.relationStatus) {
           case 'request_received':
-            return _ChatActionDialog(
+            return ChatActionDialog(
               title: 'Friend request',
               subtitle: subtitle,
               primaryText: 'Accept',
@@ -127,7 +127,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               onSecondary: () => Navigator.of(dialogContext).pop(),
             );
           case 'request_sent':
-            return _ChatActionDialog(
+            return ChatActionDialog(
               title: 'Request pending',
               subtitle: subtitle,
               primaryText: 'Notify user',
@@ -140,7 +140,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               onSecondary: () => Navigator.of(dialogContext).pop(),
             );
           case 'friends':
-            return _ChatActionDialog(
+            return ChatActionDialog(
               title: 'Friends',
               subtitle: subtitle,
               primaryText: 'Open chat',
@@ -154,7 +154,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             );
           case 'none':
           default:
-            return _ChatActionDialog(
+            return ChatActionDialog(
               title: 'Add friend',
               subtitle: subtitle,
               primaryText: 'Add friend',
@@ -277,7 +277,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       barrierColor: Colors.black.withValues(alpha: 0.62),
       builder: (dialogContext) {
         final isReceived = item.relationStatus == 'request_received';
-        return _ChatActionDialog(
+        return ChatActionDialog(
           title: isReceived ? 'Friend request' : 'Request pending',
           subtitle:
               '${item.name}  ${item.isOnline ? '• Online' : '• Offline'}\n${item.email}',
@@ -302,6 +302,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   relationStatus: 'friends',
                   lastMessage: item.lastMessage,
                   timeLabel: item.timeLabel,
+                  lastMessageAt: item.lastMessageAt,
                   unreadCount: 0,
                 ),
               );
@@ -641,15 +642,16 @@ class _ChatThreadTile extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  if (item.timeLabel.trim().isNotEmpty)
+                  if (item.chatHomeTimeLabel.trim().isNotEmpty)
                     Text(
-                      item.timeLabel,
+                      item.chatHomeTimeLabel,
                       style: GoogleFonts.ptSans(
                         color: Colors.white54,
                         fontSize: 12,
                       ),
                     ),
-                  if (item.timeLabel.trim().isNotEmpty) const SizedBox(height: 8),
+                  if (item.chatHomeTimeLabel.trim().isNotEmpty)
+                    const SizedBox(height: 8),
                   if (item.unreadCount > 0)
                     Container(
                       constraints: const BoxConstraints(minWidth: 20),
@@ -701,151 +703,6 @@ class _ProfileMenuItem extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _ChatActionDialog extends StatelessWidget {
-  const _ChatActionDialog({
-    required this.title,
-    required this.subtitle,
-    required this.primaryText,
-    required this.secondaryText,
-    this.onPrimary,
-    this.onSecondary,
-    this.primaryFilled = true,
-  });
-
-  final String title;
-  final String subtitle;
-  final String primaryText;
-  final String secondaryText;
-  final VoidCallback? onPrimary;
-  final VoidCallback? onSecondary;
-  final bool primaryFilled;
-
-  @override
-  Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 28),
-      child: Material(
-        color: const Color(0xFF121212),
-        elevation: 24,
-        shadowColor: Colors.black.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(28),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              height: 132,
-              width: double.infinity,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  const CustomPaint(painter: HexHeaderPainter()),
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          kHexHeaderBaseColor.withValues(alpha: 0),
-                          const Color(0xFF121212),
-                        ],
-                        stops: const [0.35, 1],
-                      ),
-                    ),
-                  ),
-                  const Align(
-                    alignment: Alignment(0, 0.35),
-                    child: SealpostLogoCircleBadge(),
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 4, 24, 20),
-              child: Column(
-                children: [
-                  Text(
-                    title,
-                    textAlign: TextAlign.center,
-                    style: GoogleFonts.ptSans(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
-                      height: 1.25,
-                      color: const Color(0xFFE8EAED),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    subtitle,
-                    textAlign: TextAlign.center,
-                    style: GoogleFonts.ptSans(
-                      fontSize: 14,
-                      height: 1.45,
-                      color: const Color(0xFF9AA0A6),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: onSecondary,
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFFE8EAED),
-                            side: BorderSide(
-                              color: Colors.white.withValues(alpha: 0.14),
-                            ),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                          ),
-                          child: Text(
-                            secondaryText,
-                            style: GoogleFonts.ptSans(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 15,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: FilledButton(
-                          onPressed: onPrimary,
-                          style: FilledButton.styleFrom(
-                            backgroundColor: primaryFilled
-                                ? kPrimaryBlue
-                                : Colors.white.withValues(alpha: 0.18),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                          ),
-                          child: Text(
-                            primaryText,
-                            textAlign: TextAlign.center,
-                            style: GoogleFonts.ptSans(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 15,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

@@ -8,6 +8,7 @@ class ChatContact {
     required this.relationStatus,
     required this.lastMessage,
     required this.timeLabel,
+    this.lastMessageAt,
     required this.unreadCount,
   });
 
@@ -20,7 +21,18 @@ class ChatContact {
   final String relationStatus;
   final String lastMessage;
   final String timeLabel;
+
+  /// UTC from API; when set, [chatHomeTimeLabel] uses device local timezone.
+  final DateTime? lastMessageAt;
   final int unreadCount;
+
+  /// Chat list row time — prefers [lastMessageAt] formatted locally over server [timeLabel].
+  String get chatHomeTimeLabel {
+    if (lastMessageAt != null) {
+      return _chatListRowTime(lastMessageAt!);
+    }
+    return timeLabel;
+  }
 
   /// Human-readable line for chat list when [isOnline] is false; null if unknown.
   String? get lastSeenSubtitle {
@@ -38,6 +50,7 @@ class ChatContact {
       relationStatus: '${json['relationStatus'] ?? 'none'}',
       lastMessage: '${json['lastMessage'] ?? ''}',
       timeLabel: '${json['timeLabel'] ?? ''}',
+      lastMessageAt: _parseDateTime(json['lastMessageAt']),
       unreadCount: int.tryParse('${json['unreadCount'] ?? 0}') ?? 0,
     );
   }
@@ -52,6 +65,22 @@ DateTime? _parseDateTime(dynamic v) {
 }
 
 String _two(int n) => n < 10 ? '0$n' : '$n';
+
+/// Same rules as server `chatListTimeLabel`, in the device's local timezone.
+String _chatListRowTime(DateTime at) {
+  final d = at.toLocal();
+  final now = DateTime.now();
+  final sameDay =
+      d.year == now.year && d.month == now.month && d.day == now.day;
+  if (sameDay) {
+    return _formatTime12h(d);
+  }
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct',
+    'Nov', 'Dec',
+  ];
+  return '${months[d.month - 1]} ${d.day}';
+}
 
 /// e.g. `3:05 PM`, `12:00 AM`
 String _formatTime12h(DateTime d) {
