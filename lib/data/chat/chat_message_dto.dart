@@ -31,6 +31,30 @@ class ChatReplyQuote {
       };
 }
 
+class ChatReactionEntry {
+  const ChatReactionEntry({
+    required this.userId,
+    required this.emoji,
+  });
+
+  final String userId;
+  final String emoji;
+
+  static ChatReactionEntry? fromJson(dynamic raw) {
+    if (raw is! Map) return null;
+    final m = Map<String, dynamic>.from(raw);
+    final uid = '${m['userId'] ?? ''}'.trim();
+    final em = '${m['emoji'] ?? ''}'.trim();
+    if (uid.isEmpty || em.isEmpty) return null;
+    return ChatReactionEntry(userId: uid, emoji: em);
+  }
+
+  Map<String, dynamic> toJson() => {
+        'userId': userId,
+        'emoji': emoji,
+      };
+}
+
 class ChatMessageDto {
   const ChatMessageDto({
     required this.id,
@@ -41,6 +65,7 @@ class ChatMessageDto {
     required this.createdAt,
     this.readAt,
     this.replyTo,
+    this.reactions = const [],
   });
 
   final String id;
@@ -51,12 +76,23 @@ class ChatMessageDto {
   final DateTime createdAt;
   final DateTime? readAt;
   final ChatReplyQuote? replyTo;
+  final List<ChatReactionEntry> reactions;
 
   static DateTime? _parseDate(dynamic v) {
     if (v == null) return null;
     final s = '$v';
     if (s.isEmpty) return null;
     return DateTime.tryParse(s);
+  }
+
+  static List<ChatReactionEntry> _reactionsFromJson(dynamic raw) {
+    if (raw is! List) return const [];
+    final out = <ChatReactionEntry>[];
+    for (final e in raw) {
+      final r = ChatReactionEntry.fromJson(e);
+      if (r != null) out.add(r);
+    }
+    return out;
   }
 
   factory ChatMessageDto.fromJson(Map<String, dynamic> json) {
@@ -71,6 +107,7 @@ class ChatMessageDto {
       createdAt: _parseDate(json['createdAt']) ?? DateTime.now().toUtc(),
       readAt: _parseDate(json['readAt']),
       replyTo: ChatReplyQuote.fromJson(json['replyTo']),
+      reactions: _reactionsFromJson(json['reactions']),
     );
   }
 }

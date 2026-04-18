@@ -33,6 +33,7 @@ class _UiMsg {
     required this.createdAt,
     this.outbound,
     this.replyTo,
+    this.reactions = const [],
   });
 
   final String id;
@@ -42,6 +43,7 @@ class _UiMsg {
   final DateTime createdAt;
   final OutboundDelivery? outbound;
   final ChatReplyQuote? replyTo;
+  final List<ChatReactionEntry> reactions;
 
   _UiMsg copyWith({
     String? id,
@@ -50,6 +52,7 @@ class _UiMsg {
     DateTime? createdAt,
     OutboundDelivery? outbound,
     ChatReplyQuote? replyTo,
+    List<ChatReactionEntry>? reactions,
   }) {
     return _UiMsg(
       id: id ?? this.id,
@@ -59,6 +62,7 @@ class _UiMsg {
       createdAt: createdAt ?? this.createdAt,
       outbound: outbound ?? this.outbound,
       replyTo: replyTo ?? this.replyTo,
+      reactions: reactions ?? this.reactions,
     );
   }
 
@@ -72,6 +76,7 @@ class _UiMsg {
       createdAt: createdAt,
       outbound: outbound,
       replyTo: replyTo,
+      reactions: List<ChatReactionEntry>.from(reactions),
     );
   }
 }
@@ -117,6 +122,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   final ScrollController _scroll = ScrollController();
   final List<_UiMsg> _messages = [];
   final Set<String> _serverIds = {};
+  OverlayEntry? _reactionOverlayEntry;
 
   late final ChatRepository _repo = Get.find<ChatRepository>();
   String _myId = '';
@@ -201,6 +207,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       'createdAt': m.createdAt.toUtc().toIso8601String(),
       'outbound': m.outbound?.name,
       if (m.replyTo != null) 'replyTo': m.replyTo!.toJson(),
+      if (m.reactions.isNotEmpty)
+        'reactions': m.reactions.map((e) => e.toJson()).toList(),
     };
   }
 
@@ -220,6 +228,16 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     if (rtRaw is Map) {
       replyTo = ChatReplyQuote.fromJson(Map<String, dynamic>.from(rtRaw));
     }
+    final rxRaw = e['reactions'];
+    final reactions = <ChatReactionEntry>[];
+    if (rxRaw is List) {
+      for (final x in rxRaw) {
+        if (x is Map) {
+          final r = ChatReactionEntry.fromJson(Map<String, dynamic>.from(x));
+          if (r != null) reactions.add(r);
+        }
+      }
+    }
     return _UiMsg(
       id: '${e['id'] ?? ''}',
       clientId: '${e['clientId'] ?? ''}',
@@ -228,6 +246,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       createdAt: created.isUtc ? created.toLocal() : created,
       outbound: ob,
       replyTo: replyTo,
+      reactions: reactions,
     );
   }
 
@@ -254,9 +273,27 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   GlobalKey _anchorKeyForMessageId(String id) =>
       _messageAnchorKeys.putIfAbsent(id, () => GlobalKey());
 
+  /// Match [raw] to a row in [_messages] (handles Mongo ObjectId case drift).
+  String? _resolveQuoteTargetId(String raw) {
+    final s = raw.trim();
+    if (s.isEmpty) return null;
+    for (final m in _messages) {
+      if (m.id == s) return m.id;
+    }
+    if (s.length == 24) {
+      final sl = s.toLowerCase();
+      for (final m in _messages) {
+        if (m.id.length == 24 && m.id.toLowerCase() == sl) return m.id;
+      }
+    }
+    return null;
+  }
+
+  /// [ListView.builder] does not keep off-screen items built, so [GlobalKey.currentContext]
+  /// is often null for quoted messages. Scroll near the target first, then [ensureVisible].
   void _scrollToQuotedMessage(String targetId) {
-    if (targetId.isEmpty) return;
-    if (!_messages.any((m) => m.id == targetId)) {
+    final resolved = _resolveQuoteTargetId(targetId);
+    if (resolved == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -269,21 +306,50 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       );
       return;
     }
+
     HapticFeedback.selectionClick();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final ctx = _messageAnchorKeys[targetId]?.currentContext;
-      if (ctx != null) {
-        // Align the target row's *start* (top of bubble) to the visible list's
-        // leading edge so long messages don't open scrolled to the middle.
-        Scrollable.ensureVisible(
-          ctx,
-          alignment: 0.0,
-          duration: const Duration(milliseconds: 320),
-          curve: Curves.easeOutCubic,
-        );
-      }
-    });
+
+    var didRoughJump = false;
+
+    void tick(int attempt) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final ctx = _messageAnchorKeys[resolved]?.currentContext;
+        if (ctx != null) {
+          Scrollable.ensureVisible(
+            ctx,
+            alignment: 0.12,
+            duration: const Duration(milliseconds: 340),
+            curve: Curves.easeOutCubic,
+          );
+          return;
+        }
+
+        final mIdx = _messages.indexWhere((m) => m.id == resolved);
+        if (mIdx < 0) return;
+
+        if (!didRoughJump && _scroll.hasClients) {
+          didRoughJump = true;
+          final pos = _scroll.position;
+          final min = pos.minScrollExtent;
+          final max = pos.maxScrollExtent;
+          final span = max - min;
+          final len = _messages.length;
+          // reverse: true — newest at [min], older toward [max]. Map index so oldest≈max.
+          if (len > 1 && span > 1) {
+            final t = mIdx / (len - 1);
+            final guess = min + span * (1.0 - t);
+            _scroll.jumpTo(guess.clamp(min, max));
+          }
+        }
+
+        if (attempt < 28) {
+          tick(attempt + 1);
+        }
+      });
+    }
+
+    tick(0);
   }
 
   void _bindSocket() {
@@ -297,6 +363,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     s.on('chat:message:seen', _onSeen);
     s.on('chat:typing', _onTyping);
     s.on('chat:peer:delivery_ready', _onPeerDeliveryReady);
+    s.on('chat:reaction', _onSocketReaction);
   }
 
   void _unbindSocket() {
@@ -309,6 +376,140 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     s?.off('chat:message:seen', _onSeen);
     s?.off('chat:typing', _onTyping);
     s?.off('chat:peer:delivery_ready', _onPeerDeliveryReady);
+    s?.off('chat:reaction', _onSocketReaction);
+  }
+
+  void _onSocketReaction(dynamic data) {
+    if (!mounted) return;
+    final map = data is Map ? Map<String, dynamic>.from(data) : null;
+    final mRaw = map?['message'];
+    if (mRaw is! Map) return;
+    final dto = ChatMessageDto.fromJson(Map<String, dynamic>.from(mRaw));
+    if (!_involvesPeer(dto)) return;
+    _applyReactionDto(dto);
+  }
+
+  void _applyReactionDto(ChatMessageDto dto) {
+    if (!mounted) return;
+    final i = _messages.indexWhere((m) => m.id == dto.id);
+    if (i < 0) return;
+    setState(() {
+      _messages[i] = _messages[i].copyWith(reactions: dto.reactions);
+    });
+  }
+
+  Future<void> _setMessageReaction(String messageId, String emoji) async {
+    if (messageId.isEmpty || messageId.startsWith('local:')) return;
+    try {
+      final dto = await _repo.setChatMessageReaction(
+        peerId: widget.contact.id,
+        messageId: messageId,
+        emoji: emoji,
+      );
+      _applyReactionDto(dto);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not update reaction',
+            style: GoogleFonts.ptSans(),
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  void _removeReactionOverlay() {
+    _reactionOverlayEntry?.remove();
+    _reactionOverlayEntry = null;
+  }
+
+  void _openQuickReactions(_UiMsg msg, GlobalKey anchorKey) {
+    if (msg.id.startsWith('local:')) return;
+    HapticFeedback.mediumImpact();
+    final ctx = anchorKey.currentContext;
+    if (ctx == null) return;
+    final box = ctx.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return;
+    final topLeft = box.localToGlobal(Offset.zero);
+    final size = box.size;
+    _removeReactionOverlay();
+    final overlay = Overlay.of(context);
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (oc) => _MessageReactionOverlay(
+        anchorRect: Rect.fromLTWH(topLeft.dx, topLeft.dy, size.width, size.height),
+        onDismiss: () {
+          entry.remove();
+          if (_reactionOverlayEntry == entry) {
+            _reactionOverlayEntry = null;
+          }
+        },
+        onPickEmoji: (emoji) {
+          _removeReactionOverlay();
+          unawaited(_setMessageReaction(msg.id, emoji));
+        },
+        onOpenEmojiPicker: () {
+          _removeReactionOverlay();
+          _showReactionEmojiPickerSheet(
+            onSelected: (emoji) => unawaited(_setMessageReaction(msg.id, emoji)),
+          );
+        },
+      ),
+    );
+    _reactionOverlayEntry = entry;
+    overlay.insert(entry);
+  }
+
+  void _showReactionEmojiPickerSheet({required ValueChanged<String> onSelected}) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: _ChatThreadColors.composerBar,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: SizedBox(
+          height: 280,
+          child: EmojiPicker(
+            onEmojiSelected: (_, emoji) {
+              Navigator.pop(ctx);
+              onSelected(emoji.emoji);
+            },
+            config: _chatThreadEmojiPickerConfig(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showReactionDetailsSheet(_UiMsg msg, ChatContact peer) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _ChatThreadColors.composerBar,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => _ReactionDetailsSheet(
+        msg: msg,
+        myId: _myId,
+        peerDisplayName:
+            peer.name.trim().isNotEmpty ? peer.name.trim() : peer.email,
+        onRemoveMine: () {
+          Navigator.pop(ctx);
+          unawaited(_setMessageReaction(msg.id, ''));
+        },
+        onPickEmoji: () {
+          Navigator.pop(ctx);
+          _showReactionEmojiPickerSheet(
+            onSelected: (emoji) => unawaited(_setMessageReaction(msg.id, emoji)),
+          );
+        },
+      ),
+    );
   }
 
   void _onSocketMessage(dynamic data) {
@@ -352,6 +553,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           createdAt: dto.createdAt.toLocal(),
           outbound: outbound,
           replyTo: dto.replyTo ?? prev.replyTo,
+          reactions: dto.reactions,
         );
         return;
       }
@@ -371,6 +573,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         createdAt: dto.createdAt.toLocal(),
         outbound: outbound,
         replyTo: dto.replyTo,
+        reactions: dto.reactions,
       ),
     );
     _sortMessages();
@@ -602,6 +805,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       createdAt: m.createdAt.toLocal(),
       outbound: outbound,
       replyTo: m.replyTo,
+      reactions: m.reactions,
     );
   }
 
@@ -724,6 +928,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           createdAt: DateTime.now(),
           outbound: OutboundDelivery.sending,
           replyTo: replyQuote,
+          reactions: const [],
         ),
       );
       _sortMessages();
@@ -753,6 +958,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           createdAt: r.message.createdAt.toLocal(),
           outbound: r.peerOnline ? OutboundDelivery.delivered : OutboundDelivery.sent,
           replyTo: r.message.replyTo ?? replyQuote,
+          reactions: r.message.reactions,
         );
       });
     } on DioException catch (_) {
@@ -806,6 +1012,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           createdAt: r.message.createdAt.toLocal(),
           outbound: r.peerOnline ? OutboundDelivery.delivered : OutboundDelivery.sent,
           replyTo: r.message.replyTo ?? msg.replyTo,
+          reactions: r.message.reactions,
         );
       });
     } catch (_) {
@@ -838,6 +1045,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
 
   @override
   void dispose() {
+    _removeReactionOverlay();
     _ChatThreadMemoryCache.instance.save(
       widget.contact.id,
       _messages,
@@ -931,6 +1139,12 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               onReplyQuoteTap: (q != null && !q.isEmpty)
                   ? () => _scrollToQuotedMessage(q.messageId)
                   : null,
+              onLongPressBubble: !msg.id.startsWith('local:')
+                  ? () => _openQuickReactions(msg, _anchorKeyForMessageId(msg.id))
+                  : null,
+              onReactionSummaryTap: msg.reactions.isEmpty
+                  ? null
+                  : () => _showReactionDetailsSheet(msg, peer),
             ),
           );
         },
@@ -1086,7 +1300,6 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) {
-        const tileBg = Color(0xFF2C2C2C);
         final items = <(IconData, String, Color)>[
           (Icons.photo_library_rounded, 'Gallery', const Color(0xFF2196F3)),
           (Icons.photo_camera_rounded, 'Camera', const Color(0xFFE91E8C)),
@@ -1214,6 +1427,43 @@ abstract final class _ChatThreadColors {
   static const outgoingBubble = Color(0xFF005C4B);
   static const bubbleText = Color(0xFFFFFFFF);
   static const bubbleMeta = Color(0xFF8696A0);
+}
+
+Config _chatThreadEmojiPickerConfig() {
+  const bar = _ChatThreadColors.composerBar;
+  return Config(
+    height: 256,
+    checkPlatformCompatibility: true,
+    emojiViewConfig: const EmojiViewConfig(
+      backgroundColor: _ChatThreadColors.composerBar,
+      buttonMode: ButtonMode.CUPERTINO,
+    ),
+    categoryViewConfig: CategoryViewConfig(
+      backgroundColor: bar,
+      indicatorColor: kPrimaryBlue,
+      iconColor: Colors.white.withValues(alpha: 0.54),
+      iconColorSelected: kPrimaryBlue,
+      backspaceColor: Colors.white70,
+      dividerColor: Colors.transparent,
+    ),
+    bottomActionBarConfig: const BottomActionBarConfig(
+      backgroundColor: _ChatThreadColors.composerBar,
+      buttonColor: Color(0xFF2C2C2C),
+      buttonIconColor: Colors.white70,
+      enabled: false,
+    ),
+    searchViewConfig: SearchViewConfig(
+      backgroundColor: _ChatThreadColors.composerBar,
+      buttonIconColor: Colors.white54,
+      hintTextStyle: GoogleFonts.ptSans(color: Colors.white38, fontSize: 16),
+      inputTextStyle: GoogleFonts.ptSans(color: Colors.white, fontSize: 16),
+    ),
+    viewOrderConfig: ViewOrderConfig(
+      top: EmojiPickerItem.searchBar,
+      middle: EmojiPickerItem.categoryBar,
+      bottom: EmojiPickerItem.emojiView,
+    ),
+  );
 }
 
 /// Rounded rect + small triangle at **top**-left (incoming).
@@ -1518,6 +1768,344 @@ class _SwipeToReplyWrapState extends State<_SwipeToReplyWrap>
   }
 }
 
+/// Preserves first-seen order of emoji keys for summary chips.
+List<MapEntry<String, int>> _groupReactionEmojiCounts(List<ChatReactionEntry> reactions) {
+  final order = <String>[];
+  final counts = <String, int>{};
+  for (final r in reactions) {
+    counts[r.emoji] = (counts[r.emoji] ?? 0) + 1;
+    if (!order.contains(r.emoji)) order.add(r.emoji);
+  }
+  return [for (final e in order) MapEntry(e, counts[e]!)];
+}
+
+/// Matches [_IncomingBubbleClipper._joinX] / [_OutgoingBubbleClipper._joinW] so reactions
+/// align with the **body** corner, not the tail.
+const double _kBubbleTailWidth = 9.0;
+
+String _reactionSummaryLabel(List<MapEntry<String, int>> grouped) {
+  if (grouped.isEmpty) return '';
+  if (grouped.length == 1) {
+    final e = grouped.first;
+    return e.value > 1 ? '${e.key}${e.value}' : e.key;
+  }
+  return '${grouped[0].key}${grouped[1].key}${grouped.length > 2 ? '+' : ''}';
+}
+
+/// WhatsApp-style: perfect circle, half on the bubble and half below the bottom edge.
+class _ReactionSummaryBadge extends StatelessWidget {
+  const _ReactionSummaryBadge({
+    required this.grouped,
+    required this.bubbleColor,
+  });
+
+  static const double diameter = 30.0;
+
+  final List<MapEntry<String, int>> grouped;
+  final Color bubbleColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = _reactionSummaryLabel(grouped);
+    return SizedBox(
+      width: diameter,
+      height: diameter,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: bubbleColor,
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.42),
+            width: 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.28),
+              blurRadius: 4,
+              offset: const Offset(0, 1),
+            ),
+          ],
+        ),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 3),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                label,
+                maxLines: 1,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 15, height: 1),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MessageReactionOverlay extends StatelessWidget {
+  const _MessageReactionOverlay({
+    required this.anchorRect,
+    required this.onDismiss,
+    required this.onPickEmoji,
+    required this.onOpenEmojiPicker,
+  });
+
+  final Rect anchorRect;
+  final VoidCallback onDismiss;
+  final ValueChanged<String> onPickEmoji;
+  final VoidCallback onOpenEmojiPicker;
+
+  static const _quick = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.sizeOf(context);
+    final pad = MediaQuery.paddingOf(context);
+    const barH = 48.0;
+    const gap = 8.0;
+    final barW = _quick.length * 40.0 + 44.0 + 16.0;
+    final centerX = anchorRect.left + anchorRect.width / 2;
+    var left = centerX - barW / 2;
+    left = left.clamp(8.0, media.width - barW - 8.0);
+    var top = anchorRect.top - barH - gap;
+    if (top < pad.top + 4) {
+      top = anchorRect.bottom + gap;
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onDismiss,
+              child: ColoredBox(color: Colors.black.withValues(alpha: 0.45)),
+            ),
+          ),
+          Positioned(
+            left: left,
+            top: top,
+            child: Material(
+              elevation: 12,
+              shadowColor: Colors.black.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(28),
+              color: const Color(0xFF1E1E1E),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final e in _quick)
+                      InkWell(
+                        onTap: () => onPickEmoji(e),
+                        borderRadius: BorderRadius.circular(22),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                          child: Text(e, style: const TextStyle(fontSize: 22)),
+                        ),
+                      ),
+                    InkWell(
+                      onTap: onOpenEmojiPicker,
+                      borderRadius: BorderRadius.circular(22),
+                      child: Container(
+                        width: 34,
+                        height: 34,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.12),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.add, color: Colors.white70, size: 20),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReactionDetailsSheet extends StatefulWidget {
+  const _ReactionDetailsSheet({
+    required this.msg,
+    required this.myId,
+    required this.peerDisplayName,
+    required this.onRemoveMine,
+    required this.onPickEmoji,
+  });
+
+  final _UiMsg msg;
+  final String myId;
+  final String peerDisplayName;
+  final VoidCallback onRemoveMine;
+  final VoidCallback onPickEmoji;
+
+  @override
+  State<_ReactionDetailsSheet> createState() => _ReactionDetailsSheetState();
+}
+
+class _ReactionDetailsSheetState extends State<_ReactionDetailsSheet> {
+  String? _filterEmoji;
+
+  String _nameFor(String userId) {
+    if (userId == widget.myId) return 'You';
+    return widget.peerDisplayName;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final rx = widget.msg.reactions;
+    final n = rx.length;
+    final title = n == 1 ? '1 reaction' : '$n reactions';
+    final groups = _groupReactionEmojiCounts(rx);
+    final filtered =
+        _filterEmoji == null ? rx : rx.where((e) => e.emoji == _filterEmoji).toList();
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.22),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              title,
+              style: GoogleFonts.ptSans(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 12),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  Material(
+                    color: const Color(0xFF2C2C2C),
+                    borderRadius: BorderRadius.circular(20),
+                    child: InkWell(
+                      onTap: widget.onPickEmoji,
+                      borderRadius: BorderRadius.circular(20),
+                      child: const Padding(
+                        padding: EdgeInsets.all(10),
+                        child: Icon(
+                          Icons.add_reaction_outlined,
+                          color: Colors.white54,
+                          size: 22,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  ...groups.map((g) {
+                    final selected = _filterEmoji == g.key;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Material(
+                        color: selected ? const Color(0xFF005C4B) : const Color(0xFF2C2C2C),
+                        borderRadius: BorderRadius.circular(20),
+                        child: InkWell(
+                          onTap: () => setState(() {
+                            _filterEmoji = selected ? null : g.key;
+                          }),
+                          borderRadius: BorderRadius.circular(20),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(g.key, style: const TextStyle(fontSize: 18)),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '${g.value}',
+                                  style: GoogleFonts.ptSans(
+                                    color: selected
+                                        ? const Color(0xFF7DD3A8)
+                                        : Colors.white70,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * 0.42,
+              ),
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: filtered.length,
+                itemBuilder: (context, i) {
+                  final e = filtered[i];
+                  final mine = e.userId == widget.myId;
+                  final name = _nameFor(e.userId);
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: CircleAvatar(
+                      backgroundColor: const Color(0xFF5D4037),
+                      child: Text(
+                        name.isNotEmpty ? name[0].toUpperCase() : '?',
+                        style: GoogleFonts.ptSans(color: Colors.white),
+                      ),
+                    ),
+                    title: Text(
+                      name,
+                      style: GoogleFonts.ptSans(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    subtitle: mine
+                        ? Text(
+                            'Tap to remove',
+                            style: GoogleFonts.ptSans(
+                              color: _ChatThreadColors.hintOnComposer,
+                              fontSize: 12,
+                            ),
+                          )
+                        : null,
+                    trailing: Text(e.emoji, style: const TextStyle(fontSize: 22)),
+                    onTap: mine ? widget.onRemoveMine : null,
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _OutboundTicks extends StatelessWidget {
   const _OutboundTicks({required this.state});
 
@@ -1559,6 +2147,8 @@ class _MessageBubble extends StatelessWidget {
     this.onRetry,
     this.onSwipeReply,
     this.onReplyQuoteTap,
+    this.onLongPressBubble,
+    this.onReactionSummaryTap,
   });
 
   final _UiMsg msg;
@@ -1568,6 +2158,8 @@ class _MessageBubble extends StatelessWidget {
   final VoidCallback? onRetry;
   final VoidCallback? onSwipeReply;
   final VoidCallback? onReplyQuoteTap;
+  final VoidCallback? onLongPressBubble;
+  final VoidCallback? onReactionSummaryTap;
 
   static const _bodyStyle = TextStyle(
     color: _ChatThreadColors.bubbleText,
@@ -1657,83 +2249,26 @@ class _MessageBubble extends StatelessWidget {
     final outgoing = msg.senderId == myId;
     final meta = _metaStyle(context);
     final q = msg.replyTo;
+    const baseRowBottom = 6.0;
+    final hasReactions = msg.reactions.isNotEmpty;
+    final rowBottomPadding = hasReactions
+        ? baseRowBottom +
+            _ReactionSummaryBadge.diameter / 2 +
+            6 // space below the half-outside reaction circle before the next row
+        : baseRowBottom;
 
     if (outgoing) {
       final st = msg.outbound ?? OutboundDelivery.sent;
-      final bubble = Padding(
-        padding: const EdgeInsets.only(left: 56, right: 0, bottom: 6, top: 2),
-        child: Align(
-          alignment: Alignment.centerRight,
-          child: ClipPath(
-            clipper: const _OutgoingBubbleClipper(),
-            child: ColoredBox(
-              color: _ChatThreadColors.outgoingBubble,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(10, 8, 18, 8),
-                child: IntrinsicWidth(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (q != null && !q.isEmpty) _inlineReplyStrip(q),
-                      Text(
-                        msg.body,
-                        style: GoogleFonts.ptSans(textStyle: _bodyStyle),
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(timeLabel, style: meta),
-                          const SizedBox(width: 4),
-                          if (st == OutboundDelivery.failed && onRetry != null)
-                            InkWell(
-                              onTap: onRetry,
-                              child: Padding(
-                                padding: const EdgeInsets.only(left: 2),
-                                child: Text(
-                                  'Retry',
-                                  style: GoogleFonts.ptSans(
-                                    fontSize: 12,
-                                    color: const Color(0xFF7DD3FC),
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                            )
-                          else
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 0.5),
-                              child: _OutboundTicks(state: st),
-                            ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-      if (onSwipeReply == null) return bubble;
-      return _SwipeToReplyWrap(
-        onReply: onSwipeReply!,
-        child: bubble,
-      );
-    }
-
-    final incomingBubble = Padding(
-      padding: const EdgeInsets.only(right: 56, bottom: 6, top: 2),
-      child: Align(
-        alignment: Alignment.centerLeft,
+      final grouped = _groupReactionEmojiCounts(msg.reactions);
+      final bubbleCore = GestureDetector(
+        onLongPress: onLongPressBubble,
+        behavior: HitTestBehavior.deferToChild,
         child: ClipPath(
-          clipper: const _IncomingBubbleClipper(),
+          clipper: const _OutgoingBubbleClipper(),
           child: ColoredBox(
-            color: _ChatThreadColors.incomingBubble,
+            color: _ChatThreadColors.outgoingBubble,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+              padding: const EdgeInsets.fromLTRB(10, 8, 18, 8),
               child: IntrinsicWidth(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1744,11 +2279,33 @@ class _MessageBubble extends StatelessWidget {
                       msg.body,
                       style: GoogleFonts.ptSans(textStyle: _bodyStyle),
                     ),
-                    const SizedBox(height: 5),
+                    const SizedBox(height: 4),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.end,
+                      crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Text(timeLabel, style: meta),
+                        const SizedBox(width: 4),
+                        if (st == OutboundDelivery.failed && onRetry != null)
+                          InkWell(
+                            onTap: onRetry,
+                            child: Padding(
+                              padding: const EdgeInsets.only(left: 2),
+                              child: Text(
+                                'Retry',
+                                style: GoogleFonts.ptSans(
+                                  fontSize: 12,
+                                  color: const Color(0xFF7DD3FC),
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          )
+                        else
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 0.5),
+                            child: _OutboundTicks(state: st),
+                          ),
                       ],
                     ),
                   ],
@@ -1756,6 +2313,96 @@ class _MessageBubble extends StatelessWidget {
               ),
             ),
           ),
+        ),
+      );
+      final bubble = Padding(
+        padding: EdgeInsets.only(left: 56, right: 0, bottom: rowBottomPadding, top: 2),
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              bubbleCore,
+              if (grouped.isNotEmpty && onReactionSummaryTap != null)
+                Positioned(
+                  right: _kBubbleTailWidth,
+                  bottom: -_ReactionSummaryBadge.diameter / 2,
+                  child: GestureDetector(
+                    onTap: onReactionSummaryTap,
+                    behavior: HitTestBehavior.opaque,
+                    child: _ReactionSummaryBadge(
+                      grouped: grouped,
+                      bubbleColor: _ChatThreadColors.outgoingBubble,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+      if (onSwipeReply == null) return bubble;
+      return _SwipeToReplyWrap(
+        onReply: onSwipeReply!,
+        child: bubble,
+      );
+    }
+
+    final groupedIn = _groupReactionEmojiCounts(msg.reactions);
+    final incomingCore = GestureDetector(
+      onLongPress: onLongPressBubble,
+      behavior: HitTestBehavior.deferToChild,
+      child: ClipPath(
+        clipper: const _IncomingBubbleClipper(),
+        child: ColoredBox(
+          color: _ChatThreadColors.incomingBubble,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+            child: IntrinsicWidth(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (q != null && !q.isEmpty) _inlineReplyStrip(q),
+                  Text(
+                    msg.body,
+                    style: GoogleFonts.ptSans(textStyle: _bodyStyle),
+                  ),
+                  const SizedBox(height: 5),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Text(timeLabel, style: meta),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    final incomingBubble = Padding(
+      padding: EdgeInsets.only(right: 56, bottom: rowBottomPadding, top: 2),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            incomingCore,
+            if (groupedIn.isNotEmpty && onReactionSummaryTap != null)
+              Positioned(
+                left: _kBubbleTailWidth,
+                bottom: -_ReactionSummaryBadge.diameter / 2,
+                child: GestureDetector(
+                  onTap: onReactionSummaryTap,
+                  behavior: HitTestBehavior.opaque,
+                  child: _ReactionSummaryBadge(
+                    grouped: groupedIn,
+                    bubbleColor: _ChatThreadColors.incomingBubble,
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -1836,42 +2483,7 @@ class _ThreadComposerState extends State<_ThreadComposer> {
     }
   }
 
-  static Config _emojiPickerConfig() {
-    const bar = _ChatThreadColors.composerBar;
-    return Config(
-      height: 256,
-      checkPlatformCompatibility: true,
-      emojiViewConfig: const EmojiViewConfig(
-        backgroundColor: _ChatThreadColors.composerBar,
-        buttonMode: ButtonMode.CUPERTINO,
-      ),
-      categoryViewConfig: CategoryViewConfig(
-        backgroundColor: bar,
-        indicatorColor: kPrimaryBlue,
-        iconColor: Colors.white.withValues(alpha: 0.54),
-        iconColorSelected: kPrimaryBlue,
-        backspaceColor: Colors.white70,
-        dividerColor: Colors.transparent,
-      ),
-      bottomActionBarConfig: const BottomActionBarConfig(
-        backgroundColor:_ChatThreadColors.composerBar,
-        buttonColor: Color(0xFF2C2C2C),
-        buttonIconColor: Colors.white70,
-        enabled: false,
-      ),
-      searchViewConfig: SearchViewConfig(
-        backgroundColor: _ChatThreadColors.composerBar,
-        buttonIconColor: Colors.white54,
-        hintTextStyle: GoogleFonts.ptSans(color: Colors.white38, fontSize: 16),
-        inputTextStyle: GoogleFonts.ptSans(color: Colors.white, fontSize: 16),
-      ),
-      viewOrderConfig: ViewOrderConfig(
-        top: EmojiPickerItem.searchBar,
-        middle: EmojiPickerItem.categoryBar,
-        bottom: EmojiPickerItem.emojiView,
-      ),
-    );
-  }
+  static Config _emojiPickerConfig() => _chatThreadEmojiPickerConfig();
 
   @override
   Widget build(BuildContext context) {

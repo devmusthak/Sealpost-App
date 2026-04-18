@@ -187,4 +187,34 @@ class ChatRepository {
       options: Options(headers: {'Authorization': 'Bearer $token'}),
     );
   }
+
+  /// Sets or removes your reaction. Empty [emoji] removes. Same emoji again toggles off (server).
+  Future<ChatMessageDto> setChatMessageReaction({
+    required String peerId,
+    required String messageId,
+    required String emoji,
+  }) async {
+    final token = Get.find<AuthRepository>().accessToken;
+    if (token == null || token.isEmpty) {
+      throw StateError('Not signed in');
+    }
+    final res = await _dio.post<dynamic>(
+      ApiEndpoints.chatMessageReaction,
+      data: {
+        'peerId': peerId,
+        'messageId': messageId,
+        'emoji': emoji,
+      },
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
+    final raw = res.data;
+    if (raw is! Map) {
+      throw StateError('Invalid reaction response');
+    }
+    final msgRaw = raw['message'];
+    if (msgRaw is! Map) {
+      throw StateError('Invalid reaction response');
+    }
+    return ChatMessageDto.fromJson(Map<String, dynamic>.from(msgRaw));
+  }
 }

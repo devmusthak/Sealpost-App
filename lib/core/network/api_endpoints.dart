@@ -31,6 +31,7 @@ abstract final class ApiEndpoints {
   static const String chatNotifyFriendRequest = '$chatFriendRequest/notify';
   static const String chatMessages = '$chatPrefix/messages';
   static const String chatMessagesRead = '$chatMessages/read';
+  static const String chatMessageReaction = '$chatMessages/reaction';
 
   static String get socketOrigin {
     final u = Uri.parse(baseUrl);
