@@ -17,6 +17,7 @@ class MailDetail {
     required this.flagged,
     this.messageType,
     this.attachments = const [],
+    this.inboxUnreadCount,
   });
 
   final String id;
@@ -34,6 +35,9 @@ class MailDetail {
   final String? messageType;
   final List<MailAttachment> attachments;
 
+  /// Present on GET mail by id: server recomputed INBOX unseen count after open.
+  final int? inboxUnreadCount;
+
   factory MailDetail.fromJson(Map<String, dynamic> json) {
     return MailDetail(
       id: '${json['id'] ?? ''}',
@@ -50,7 +54,15 @@ class MailDetail {
       flagged: json['flagged'] == true,
       messageType: _nullableString(json['messageType']),
       attachments: _attachmentList(json['attachments']),
+      inboxUnreadCount: _optInt(json['inboxUnreadCount']),
     );
+  }
+
+  static int? _optInt(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse('$v');
   }
 
   static String? _nullableString(dynamic v) {

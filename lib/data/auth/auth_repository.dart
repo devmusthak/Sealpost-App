@@ -18,6 +18,8 @@ class AuthRepository {
 
   String? get accessToken => _session?.token;
 
+  String? get userId => _session?.userId;
+
   /// [firebaseUid] — set when Firebase Auth is wired; send `''` until then (server clears field).
   Future<void> login({
     required String email,
@@ -117,6 +119,20 @@ class AuthRepository {
   }
 
   Future<void> logout() async {
+    final bearer = accessToken;
+    if (bearer != null && bearer.isNotEmpty) {
+      try {
+        await _dio.post(
+          ApiEndpoints.presence,
+          data: {'online': false},
+          options: Options(
+            headers: {'Authorization': 'Bearer $bearer'},
+          ),
+        );
+      } catch (_) {
+        /* still clear session */
+      }
+    }
     _session = null;
     await _sessionStorage.clear();
   }
@@ -138,5 +154,26 @@ class AuthRepository {
     } catch (_) {
       /* non-fatal */
     }
+  }
+
+  Future<void> updatePresence({required bool online}) async {
+    final bearer = accessToken;
+    if (bearer == null || bearer.isEmpty) return;
+    try {
+      await _dio.post(
+        ApiEndpoints.presence,
+        data: {'online': online},
+        options: Options(
+          headers: {'Authorization': 'Bearer $bearer'},
+        ),
+      );
+    } catch (_) {
+      /* non-fatal */
+    }
+  }
+
+  /// After login or restoring a session, push online so presence works even if lifecycle already fired before a token existed.
+  Future<void> syncPresenceForActiveSession() async {
+    await updatePresence(online: true);
   }
 }

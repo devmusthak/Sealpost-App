@@ -3,7 +3,7 @@ import 'package:get/get.dart';
 
 import '../../../data/auth/auth_exception.dart';
 import '../../../data/auth/auth_repository.dart';
-import '../../home/view/home_view.dart';
+import '../../navigation/view/main_navigation_view.dart';
 import '../model/login_constants.dart';
 
 /// Login form state + API (GetX).
@@ -44,7 +44,8 @@ class LoginController extends GetxController {
         password: password,
         firebaseUid: LoginConstants.firebaseUidPlaceholder,
       );
-      Get.off(() => const HomeScreen());
+      await repo.syncPresenceForActiveSession();
+      Get.off(() => const MainNavigationScreen());
     } on AuthException catch (e) {
       errorMessage.value = e.message;
       if (e.retryAfterSeconds != null) {

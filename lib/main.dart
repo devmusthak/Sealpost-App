@@ -13,6 +13,7 @@ import 'core/push/push_notification_service.dart';
 import 'core/network/auth_interceptor.dart';
 import 'core/network/dio_client.dart';
 import 'data/auth/auth_repository.dart';
+import 'data/chat/chat_repository.dart';
 import 'data/mail/mail_repository.dart';
 import 'data/session/session_storage.dart';
 import 'firebase_options.dart';
@@ -37,11 +38,13 @@ Future<void> main() async {
     MailRepository(Get.find<Dio>()),
     permanent: true,
   );
+  Get.put<ChatRepository>(ChatRepository(Get.find<Dio>()), permanent: true);
   Get.put(
     MailtoLinkService(Get.find<SessionStorage>()),
     permanent: true,
   );
   Get.put(PendingMailNotification(), permanent: true);
+  Get.put(PendingChatNotification(), permanent: true);
   runApp(const SealpostApp());
 }
 
@@ -52,13 +55,82 @@ class SealpostApp extends StatefulWidget {
   State<SealpostApp> createState() => _SealpostAppState();
 }
 
-class _SealpostAppState extends State<SealpostApp> {
+class _SealpostAppState extends State<SealpostApp> with WidgetsBindingObserver {
   StreamSubscription<Uri>? _appLinkSub;
+  Timer? _presenceHeartbeat;
+  bool _presenceForeground = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_initAppLinks());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _syncPresenceFromLifecycle();
+    });
+  }
+
+  void _goPresenceForeground() {
+    if (_presenceForeground) return;
+    _presenceForeground = true;
+    unawaited(_updatePresence(online: true));
+    _presenceHeartbeat?.cancel();
+    _presenceHeartbeat = Timer.periodic(const Duration(seconds: 35), (_) {
+      if (_presenceForeground) unawaited(_updatePresence(online: true));
+    });
+  }
+
+  void _goPresenceBackground() {
+    if (!_presenceForeground) return;
+    _presenceForeground = false;
+    _presenceHeartbeat?.cancel();
+    _presenceHeartbeat = null;
+    unawaited(_updatePresence(online: false));
+  }
+
+  void _syncPresenceFromLifecycle() {
+    if (!mounted) return;
+    final s = WidgetsBinding.instance.lifecycleState;
+    switch (s) {
+      case AppLifecycleState.resumed:
+        _goPresenceForeground();
+        break;
+      case AppLifecycleState.inactive:
+        break;
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        _goPresenceBackground();
+        break;
+      case null:
+        // First frames often report null; do not send offline — that raced with
+        // [resumed] on emulators and cleared presence while the app was active.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          final s2 = WidgetsBinding.instance.lifecycleState;
+          if (s2 == AppLifecycleState.resumed) {
+            _goPresenceForeground();
+          }
+        });
+        break;
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _goPresenceForeground();
+        break;
+      case AppLifecycleState.inactive:
+        break;
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        _goPresenceBackground();
+        break;
+    }
   }
 
   Future<void> _initAppLinks() async {
@@ -78,11 +150,19 @@ class _SealpostAppState extends State<SealpostApp> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _presenceHeartbeat?.cancel();
+    unawaited(_updatePresence(online: false));
     final sub = _appLinkSub;
     if (sub != null) {
       unawaited(sub.cancel());
     }
     super.dispose();
+  }
+
+  Future<void> _updatePresence({required bool online}) async {
+    if (!Get.isRegistered<AuthRepository>()) return;
+    await Get.find<AuthRepository>().updatePresence(online: online);
   }
 
   @override

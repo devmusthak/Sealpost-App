@@ -28,6 +28,7 @@ dependencies:
   file_picker: ^10.1.9
   app_links: ^6.4.1
   flutter_local_notifications: ^21.0.0
+  emoji_picker_flutter: ^4.4.0
 
 dev_dependencies:
   flutter_test:
@@ -42,3 +43,4 @@ flutter:
     - assets/splash-bg.svg
     - assets/logo.svg
     - assets/head-login.svg
+    - assets/chat.webp

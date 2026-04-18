@@ -17,6 +17,7 @@ class LocalNotificationService {
   static bool _initialized = false;
 
   static void Function(Map<String, String> data)? _onMailTap;
+  static void Function(Map<String, String> data)? _onChatTap;
 
   static const NotificationDetails _mailChannelDetails = NotificationDetails(
     android: AndroidNotificationDetails(
@@ -45,10 +46,12 @@ class LocalNotificationService {
 
   static Future<void> init({
     required void Function(Map<String, String> data) onMailNotificationTap,
+    void Function(Map<String, String> data)? onChatNotificationTap,
   }) async {
     if (_initialized) return;
     _initialized = true;
     _onMailTap = onMailNotificationTap;
+    _onChatTap = onChatNotificationTap;
 
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     const darwinInit = DarwinInitializationSettings(
@@ -97,8 +100,11 @@ class LocalNotificationService {
     try {
       final raw = jsonDecode(payload) as Map<String, dynamic>;
       final data = raw.map((k, v) => MapEntry(k.toString(), '${v ?? ''}'));
-      if (data['type'] == 'new_mail') {
+      final t = data['type'] ?? '';
+      if (t == 'new_mail') {
         _onMailTap?.call(data);
+      } else if (t == 'new_chat_message') {
+        _onChatTap?.call(data);
       }
     } catch (e) {
       if (kDebugMode) {
@@ -118,11 +124,33 @@ class LocalNotificationService {
 
   static int _idForMail(String mailId) => mailId.hashCode & 0x7fffffff;
 
+  static int _idForChatMessage(String messageId) => messageId.hashCode & 0x7fffffff;
+
   /// Shows a local notification for FCM while the app is in the foreground on Android.
   /// Handles `new_mail` and test/other payloads that include a [RemoteMessage.notification].
   static Future<void> showForegroundRemoteMessage(RemoteMessage message) async {
     if (!_initialized) return;
     final d = message.data;
+
+    if (d['type'] == 'new_chat_message') {
+      final messageId = (d['messageId'] ?? '').trim();
+      if (messageId.isEmpty) return;
+      final title = message.notification?.title ??
+          ((d['fromName'] ?? '').trim().isNotEmpty
+              ? d['fromName']!
+              : ((d['fromEmail'] ?? '').trim().isNotEmpty ? d['fromEmail']! : 'New message'));
+      final body = message.notification?.body ??
+          ((d['body'] ?? '').trim().isNotEmpty ? d['body']! : 'You have a new chat message');
+      final payloadMap = d.map((k, v) => MapEntry(k, '$v'));
+      await _plugin.show(
+        id: _idForChatMessage(messageId),
+        title: title,
+        body: body,
+        notificationDetails: _mailChannelDetails,
+        payload: jsonEncode(payloadMap),
+      );
+      return;
+    }
 
     if (d['type'] == 'new_mail') {
       final mailId = (d['mailId'] ?? '').trim();

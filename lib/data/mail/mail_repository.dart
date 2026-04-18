@@ -67,9 +67,14 @@ class MailRepository {
         }
       }
       final total = data['total'];
+      final inboxUnreadRaw = data['inboxUnreadCount'];
+      final inboxUnread = inboxUnreadRaw is int
+          ? inboxUnreadRaw
+          : int.tryParse('$inboxUnreadRaw') ?? 0;
       return MailListResult(
         items: items,
         total: total is int ? total : int.tryParse('$total') ?? items.length,
+        inboxUnreadCount: inboxUnread,
       );
     }
 
@@ -226,8 +231,12 @@ class MailListResult {
   const MailListResult({
     required this.items,
     required this.total,
+    this.inboxUnreadCount = 0,
   });
 
   final List<MailListItem> items;
   final int total;
+
+  /// Unread messages in INBOX (from server); 0 if absent.
+  final int inboxUnreadCount;
 }

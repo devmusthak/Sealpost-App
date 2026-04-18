@@ -8,6 +8,7 @@ class MailListItem {
     this.fromAddress,
     required this.flagged,
     this.messageType,
+    this.seen = false,
   });
 
   final String id;
@@ -19,6 +20,9 @@ class MailListItem {
   final bool flagged;
   final String? messageType;
 
+  /// True when the message has been opened / marked read on the server.
+  final bool seen;
+
   /// Placeholder row for [Skeletonizer]; real text is replaced by animated bones.
   factory MailListItem.skeletonSeed(int index) {
     return MailListItem(
@@ -29,6 +33,7 @@ class MailListItem {
       date: DateTime.now().toIso8601String(),
       fromName: 'Sender name',
       flagged: false,
+      seen: false,
     );
   }
 
@@ -43,6 +48,7 @@ class MailListItem {
       fromAddress: _nullableString(json['fromAddress']),
       flagged: _bool(json['flagged']),
       messageType: _nullableString(json['messageType']),
+      seen: _bool(json['seen']),
     );
   }
 

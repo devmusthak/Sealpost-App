@@ -43,6 +43,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
   static const _dividerColor = Color(0xFF3C4043);
 
   late final String _fromEmail;
+  late final String _fromName;
 
   /// To addresses shown as chips only when [length >= 2]. One address stays in [_toInputController] only.
   final List<String> _toRecipients = [];
@@ -94,7 +95,9 @@ class _ComposeScreenState extends State<ComposeScreen> {
   @override
   void initState() {
     super.initState();
-    _fromEmail = Get.find<AuthRepository>().session?.email ?? '';
+    final session = Get.find<AuthRepository>().session;
+    _fromEmail = session?.email ?? '';
+    _fromName = session?.name ?? '';
     final pre = widget.prefill;
     if (pre != null) {
       _applyPrefill(pre);
@@ -712,6 +715,13 @@ class _ComposeScreenState extends State<ComposeScreen> {
 
   /// Slightly off-white so it stays readable on black regardless of theme merges.
   static const _fromEmailColor = Color(0xFFE8EAED);
+  String get _fromDisplay {
+    final email = _fromEmail.trim();
+    final name = _fromName.trim();
+    if (name.isEmpty) return email.isEmpty ? '—' : email;
+    if (email.isEmpty) return name;
+    return '$name <$email>';
+  }
 
   Widget _fromRow() {
     return Padding(
@@ -728,7 +738,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
           ),
           Expanded(
             child: SelectableText(
-              _fromEmail.isEmpty ? '—' : _fromEmail,
+              _fromDisplay,
               style: GoogleFonts.ptSans(
                 color: _fromEmailColor,
                 fontSize: 15,

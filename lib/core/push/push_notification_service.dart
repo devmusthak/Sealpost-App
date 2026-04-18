@@ -2,13 +2,16 @@ import 'dart:async';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
 
 import '../../data/auth/auth_repository.dart';
-import 'local_notification_service.dart';
+import '../../data/chat/chat_contact.dart';
 import '../../data/mail/mail_list_item.dart';
+import '../../screens/chat/view/chat_thread_view.dart';
 import '../../screens/home/controller/home_controller.dart';
 import '../../screens/mail_detail/view/mail_detail_view.dart';
+import 'local_notification_service.dart';
 
 /// Holds a notification tap until [HomeScreen] is ready to navigate.
 class PendingMailNotification extends GetxController {
@@ -20,7 +23,7 @@ class PendingMailNotification extends GetxController {
       mailId != null && mailId!.isNotEmpty && preview != null;
 
   void setFromMessage(RemoteMessage message) {
-    applyFromData(Map<String, String>.from(message.data));
+    applyFromData(Map<String, String>.from(message.data.map((k, v) => MapEntry(k, '$v'))));
   }
 
   void applyFromData(Map<String, String> d) {
@@ -55,6 +58,40 @@ class PendingMailNotification extends GetxController {
   }
 }
 
+/// FCM / local notification tap for opening a 1:1 chat thread.
+class PendingChatNotification extends GetxController {
+  ChatContact? contact;
+
+  bool get hasPending => contact != null;
+
+  void setFromMessage(RemoteMessage message) {
+    applyFromData(Map<String, String>.from(message.data.map((k, v) => MapEntry(k, '$v'))));
+  }
+
+  void applyFromData(Map<String, String> d) {
+    if (d['type'] != 'new_chat_message') return;
+    final id = (d['fromUserId'] ?? d['peerId'] ?? '').trim();
+    if (id.isEmpty) return;
+    final name = (d['fromName'] ?? '').trim();
+    final email = (d['fromEmail'] ?? '').trim();
+    contact = ChatContact(
+      id: id,
+      name: name.isNotEmpty ? name : (email.isNotEmpty ? email : 'Chat'),
+      email: email.isNotEmpty ? email : '',
+      isOnline: false,
+      lastSeenAt: null,
+      relationStatus: 'friends',
+      lastMessage: '',
+      timeLabel: '',
+      unreadCount: 0,
+    );
+  }
+
+  void clear() {
+    contact = null;
+  }
+}
+
 class PushNotificationService {
   PushNotificationService._();
 
@@ -84,6 +121,10 @@ class PushNotificationService {
         Get.find<PendingMailNotification>().applyFromData(data);
         tryNavigateToMailDetail();
       },
+      onChatNotificationTap: (data) {
+        Get.find<PendingChatNotification>().applyFromData(data);
+        tryNavigateToChatThread();
+      },
     );
     await LocalNotificationService.consumeLaunchNotification();
 
@@ -94,7 +135,7 @@ class PushNotificationService {
       if (kDebugMode) {
         debugPrint('[fcm] foreground ${message.notification?.title}');
       }
-      // Android: FCM does not show a heads-up while foreground; use local notifs.
+      // Android: FCM does not show a heads-up while app is open; use local notifs.
       // iOS/macOS: [setForegroundNotificationPresentationOptions] shows the system banner.
       if (defaultTargetPlatform == TargetPlatform.android) {
         unawaited(LocalNotificationService.showForegroundRemoteMessage(message));
@@ -110,6 +151,14 @@ class PushNotificationService {
   }
 
   static void _handleMessageOpened(RemoteMessage message) {
+    final d = Map<String, String>.from(
+      message.data.map((k, v) => MapEntry(k, '$v')),
+    );
+    if (d['type'] == 'new_chat_message') {
+      Get.find<PendingChatNotification>().setFromMessage(message);
+      tryNavigateToChatThread();
+      return;
+    }
     Get.find<PendingMailNotification>().setFromMessage(message);
     tryNavigateToMailDetail();
   }
@@ -175,5 +224,28 @@ class PushNotificationService {
         folderKey: folder,
       ),
     );
+  }
+
+  /// Call from [HomeScreen] after [HomeController] exists (same timing as mail).
+  static void tryNavigateToChatThread() {
+    if (!Get.isRegistered<PendingChatNotification>()) return;
+    final pending = Get.find<PendingChatNotification>();
+    if (!pending.hasPending) return;
+    if (!Get.isRegistered<AuthRepository>()) return;
+    final token = Get.find<AuthRepository>().accessToken;
+    if (token == null || token.isEmpty) return;
+    if (!Get.isRegistered<HomeController>()) return;
+
+    final contact = pending.contact!;
+    pending.clear();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_openChatThread(contact));
+    });
+  }
+
+  static Future<void> _openChatThread(ChatContact contact) async {
+    await Future<void>.delayed(Duration.zero);
+    Get.to<void>(() => ChatThreadScreen(contact: contact));
   }
 }

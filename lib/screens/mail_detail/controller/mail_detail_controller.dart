@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import '../../../data/mail/mail_detail.dart';
 import '../../../data/mail/mail_list_item.dart';
 import '../../../data/mail/mail_repository.dart';
+import '../../home/controller/home_controller.dart';
 
 class MailDetailController extends GetxController {
   MailDetailController({
@@ -37,6 +38,10 @@ class MailDetailController extends GetxController {
     try {
       final d = await Get.find<MailRepository>().fetchMailById(mailId);
       detail.value = d;
+      final synced = d.inboxUnreadCount;
+      if (synced != null && Get.isRegistered<HomeController>()) {
+        Get.find<HomeController>().setInboxUnreadCount(synced);
+      }
       errorMessage.value = null;
     } on DioException catch (e) {
       errorMessage.value = e.message ?? 'Could not load message';

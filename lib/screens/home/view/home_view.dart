@@ -13,7 +13,6 @@ import '../../../data/auth/auth_repository.dart';
 import '../../../data/mail/mail_list_item.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/app_text.dart';
-import '../../../widgets/hex_header_background.dart';
 import '../../compose/view/compose_view.dart';
 import '../../mail_detail/view/mail_detail_view.dart';
 import '../controller/home_controller.dart';
@@ -28,7 +27,6 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   late final HomeController _controller;
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   late final Worker _mailtoWorker;
 
   @override
@@ -44,6 +42,7 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(PushNotificationService.syncFcmTokenToServer());
       PushNotificationService.tryNavigateToMailDetail();
+      PushNotificationService.tryNavigateToChatThread();
     });
   }
 
@@ -78,132 +77,6 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Figma: menu icon (soft white).
   static const _appBarIcon = Color(0xFFE8EAED);
 
-  /// Sidebar (drawer) brand header height.
-  static const double _drawerHeaderHeight = 160;
-
-  static const _drawerDivider = Color(0xFF3C4043);
-  static const _logoutRed = Color(0xFFEA4335);
-
-  Widget _homeDrawer(BuildContext context) {
-    return Drawer(
-      backgroundColor: Colors.transparent,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          SvgPicture.asset(
-            'assets/head-login.svg',
-            fit: BoxFit.cover,
-            alignment: Alignment.topCenter,
-          ),
-          ColoredBox(color: _overlay.withValues(alpha: 0.88)),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SizedBox(
-                height: _drawerHeaderHeight,
-                child: ClipRect(
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      const CustomPaint(painter: HexHeaderPainter()),
-                      DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              kHexHeaderBaseColor.withValues(alpha: 0),
-                              _overlay,
-                            ],
-                            stops: const [0.35, 1],
-                          ),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 0, 20, 0),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              SvgPicture.asset(
-                                'assets/logo.svg',
-                                fit: BoxFit.contain,
-                                width: 30,
-                                height: 30,
-                              ),
-                              const SizedBox(width: 14),
-                              Text(
-                                'SEALPOST',
-                                style: sealpostWordmarkStyle(
-                                  color: Colors.white,
-                                  fontSize: 20,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const Divider(height: 1, color: _drawerDivider),
-              Expanded(
-                child: Obx(() {
-                  final current = _controller.selectedFolder.value;
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _DrawerNavTile(
-                        icon: Icons.inbox_outlined,
-                        label: 'Inbox',
-                        selected: current == HomeFolder.inbox,
-                        onTap: () {
-                          Navigator.pop(context);
-                          unawaited(_controller.selectFolder(HomeFolder.inbox));
-                        },
-                      ),
-                      _DrawerNavTile(
-                        icon: Icons.send_outlined,
-                        label: 'Sent',
-                        selected: current == HomeFolder.sent,
-                        onTap: () {
-                          Navigator.pop(context);
-                          unawaited(_controller.selectFolder(HomeFolder.sent));
-                        },
-                      ),
-                    ],
-                  );
-                }),
-              ),
-              const Divider(height: 1, color: _drawerDivider),
-              ListTile(
-                leading: Icon(
-                  Icons.logout_rounded,
-                  color: _logoutRed,
-                  size: 24,
-                ),
-                title: Text(
-                  'Log out',
-                  style: GoogleFonts.ptSans(
-                    color: _logoutRed,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 16,
-                  ),
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  unawaited(_controller.logout());
-                },
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final auth = Get.find<AuthRepository>().session;
@@ -215,24 +88,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
-        key: _scaffoldKey,
         backgroundColor: _overlay,
-        onDrawerChanged: (isOpened) {
-          if (isOpened) {
-            SystemChrome.setSystemUIOverlayStyle(
-              SystemUiOverlayStyle(
-                statusBarColor: _overlay,
-                statusBarIconBrightness: Brightness.light,
-                statusBarBrightness: Brightness.dark,
-                systemNavigationBarColor: _overlay,
-                systemNavigationBarIconBrightness: Brightness.light,
-              ),
-            );
-          } else {
-            SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light);
-          }
-        },
-        drawer: _homeDrawer(context),
         body: Stack(
           fit: StackFit.expand,
           children: [
@@ -253,7 +109,24 @@ class _HomeScreenState extends State<HomeScreen> {
                       hintColor: _searchHint,
                       iconColor: _appBarIcon,
                       initial: initial,
-                      onMenuTap: () => _scaffoldKey.currentState?.openDrawer(),
+                      onProfileMenuSelected: (value) {
+                        switch (value) {
+                          case 'inbox':
+                            unawaited(_controller.selectFolder(HomeFolder.inbox));
+                            break;
+                          case 'send':
+                            unawaited(_controller.selectFolder(HomeFolder.sent));
+                            break;
+                          case 'profile':
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Profile coming soon'),
+                                duration: Duration(seconds: 1),
+                              ),
+                            );
+                            break;
+                        }
+                      },
                       onSearchTap: () async {
                         final picked = await showSearch<MailListItem?>(
                           context: context,
@@ -266,10 +139,8 @@ class _HomeScreenState extends State<HomeScreen> {
                             preview: picked,
                             folderKey: _controller.selectedFolder.value,
                           ),
-                        )?.then((deleted) {
-                          if (deleted == true) {
-                            _controller.refreshInbox();
-                          }
+                        )?.then((_) {
+                          unawaited(_controller.refreshInbox());
                         });
                       },
                     ),
@@ -371,10 +242,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 .selectedFolder
                                                 .value,
                                           ),
-                                        )?.then((deleted) {
-                                          if (deleted == true) {
-                                            _controller.refreshInbox();
-                                          }
+                                        )?.then((_) {
+                                          unawaited(
+                                            _controller.refreshInbox(),
+                                          );
                                         });
                                       },
                               );
@@ -435,46 +306,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-class _DrawerNavTile extends StatelessWidget {
-  const _DrawerNavTile({
-    required this.icon,
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final accent = selected ? kPrimaryBlue : Colors.white70;
-    return ListTile(
-      leading: Icon(icon, color: accent, size: 24),
-      title: Text(
-        label,
-        style: GoogleFonts.ptSans(
-          color: selected ? kPrimaryBlue : Colors.white,
-          fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-          fontSize: 16,
-        ),
-      ),
-      selected: selected,
-      selectedTileColor: kPrimaryBlue.withValues(alpha: 0.12),
-      onTap: onTap,
-    );
-  }
-}
-
 class _HomeSearchAppBar extends StatelessWidget {
   const _HomeSearchAppBar({
     required this.surfaceColor,
     required this.hintColor,
     required this.iconColor,
     required this.initial,
-    required this.onMenuTap,
+    required this.onProfileMenuSelected,
     required this.onSearchTap,
   });
 
@@ -482,7 +320,7 @@ class _HomeSearchAppBar extends StatelessWidget {
   final Color hintColor;
   final Color iconColor;
   final String initial;
-  final VoidCallback onMenuTap;
+  final ValueChanged<String> onProfileMenuSelected;
   final VoidCallback onSearchTap;
 
   static const double _pillRadius = 28;
@@ -492,19 +330,6 @@ class _HomeSearchAppBar extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onMenuTap,
-            customBorder: const CircleBorder(),
-            child: SizedBox(
-              width: 44,
-              height: 48,
-              child: Icon(Icons.menu, size: 22, color: iconColor),
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
         Expanded(
           child: Material(
             color: surfaceColor,
@@ -545,18 +370,81 @@ class _HomeSearchAppBar extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 10),
-        CircleAvatar(
-          radius: 18,
-          backgroundColor: kPrimaryBlue.withValues(alpha: 0.92),
-          child: Text(
-            initial,
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w600,
-              fontSize: 15,
-              height: 1,
+        PopupMenuButton<String>(
+          tooltip: 'Account menu',
+          color: _HomeScreenState._appBarSurface,
+          constraints: const BoxConstraints(minWidth: 190),
+          elevation: 14,
+          shadowColor: Colors.black.withValues(alpha: 0.45),
+          surfaceTintColor: Colors.transparent,
+          position: PopupMenuPosition.under,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          onSelected: onProfileMenuSelected,
+          itemBuilder: (context) => [
+            PopupMenuItem<String>(
+              value: 'inbox',
+              child: ProfileMenuItem(
+                icon: Icons.inbox_outlined,
+                label: 'Inbox',
+              ),
+            ),
+             PopupMenuDivider(height: 1 , color: Colors.white.withValues(alpha: 0.08)),
+            PopupMenuItem<String>(
+              value: 'send',
+              child: ProfileMenuItem(
+                icon: Icons.send_outlined,
+                label: 'Send',
+              ),
+            ),
+             PopupMenuDivider(height: 1 , color: Colors.white.withValues(alpha: 0.08)),
+            PopupMenuItem<String>(
+              value: 'profile',
+              child: ProfileMenuItem(
+                icon: Icons.person_outline,
+                label: 'Profile',
+              ),
+            ),
+          ],
+          child: CircleAvatar(
+            radius: 18,
+            backgroundColor: kPrimaryBlue.withValues(alpha: 0.92),
+            child: Text(
+              initial,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 15,
+                height: 1,
+              ),
             ),
           ),
+        ),
+      ],
+    );
+  }
+}
+
+class ProfileMenuItem extends StatelessWidget {
+  const ProfileMenuItem({super.key, required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: Colors.white.withValues(alpha: 0.92)),
+         Padding(
+           padding: const EdgeInsets.symmetric(horizontal: 10),
+           child: SizedBox(width: 1 , height: 20 , child: ColoredBox(color: Colors.white.withValues(alpha: 0.2))),
+         ),
+        Text(
+          label,
+          style: GoogleFonts.ptSans(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
         ),
       ],
     );
@@ -584,6 +472,11 @@ class _MailRow extends StatelessWidget {
       item.fromName.isNotEmpty ? item.fromName : '?',
     );
     final avatarColor = _avatars[index % _avatars.length];
+    final read = item.seen;
+    final fromAlpha = read ? 0.52 : 1.0;
+    final subjectAlpha = read ? 0.42 : 0.85;
+    final snippetAlpha = read ? 0.28 : 0.55;
+    final metaAlpha = read ? 0.28 : 0.54;
 
     return Material(
       color: Colors.transparent,
@@ -599,8 +492,8 @@ class _MailRow extends StatelessWidget {
                 backgroundColor: avatarColor,
                 child: Text(
                   letter,
-                  style: const TextStyle(
-                    color: Colors.white,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: read ? 0.55 : 1.0),
                     fontWeight: FontWeight.w600,
                     fontSize: 18,
                   ),
@@ -613,8 +506,8 @@ class _MailRow extends StatelessWidget {
                   children: [
                     AppText(
                       item.fromName,
-                      style: const TextStyle(
-                        color: Colors.white,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: fromAlpha),
                         fontWeight: FontWeight.w700,
                         fontSize: 16,
                         height: 1.2,
@@ -626,7 +519,7 @@ class _MailRow extends StatelessWidget {
                     AppText(
                       item.subject ?? '(No subject)',
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.85),
+                        color: Colors.white.withValues(alpha: subjectAlpha),
                         fontWeight: FontWeight.w500,
                         fontSize: 14,
                         height: 1.2,
@@ -638,7 +531,7 @@ class _MailRow extends StatelessWidget {
                     AppText(
                       item.snippet,
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.55),
+                        color: Colors.white.withValues(alpha: snippetAlpha),
                         fontSize: 13,
                         height: 1.25,
                       ),
@@ -655,7 +548,7 @@ class _MailRow extends StatelessWidget {
                   Text(
                     _formatShortDate(item.date),
                     style: GoogleFonts.ptSans(
-                      color: Colors.white54,
+                      color: Colors.white.withValues(alpha: metaAlpha),
                       fontSize: 12,
                     ),
                   ),
@@ -663,7 +556,7 @@ class _MailRow extends StatelessWidget {
                   Icon(
                     item.flagged ? Icons.star : Icons.star_border,
                     size: 20,
-                    color: Colors.white38,
+                    color: Colors.white.withValues(alpha: read ? 0.2 : 0.38),
                   ),
                 ],
               ),

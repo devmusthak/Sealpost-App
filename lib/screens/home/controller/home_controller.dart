@@ -23,12 +23,18 @@ class HomeController extends GetxController {
   final isLoading = true.obs;
   final RxnString errorMessage = RxnString();
 
+  /// Unread INBOX messages (server); updated on list load, mail open, and `mail:new`.
+  final inboxUnreadCount = 0.obs;
+
   /// Currently selected mailbox (see [HomeFolder]).
   final selectedFolder = HomeFolder.inbox.obs;
 
   late final MailRepository _mailRepo = Get.find<MailRepository>();
 
   io.Socket? _socket;
+
+  /// Dedupe `mail:new` socket events so unread badge does not double-count.
+  final Set<String> _mailNewEventIds = <String>{};
 
   @override
   void onInit() {
@@ -45,6 +51,10 @@ class HomeController extends GetxController {
   }
 
   Future<void> refreshInbox() => _loadMails();
+
+  void setInboxUnreadCount(int n) {
+    inboxUnreadCount.value = n < 0 ? 0 : n;
+  }
 
   /// Uppercase section title under the search bar (e.g. INBOX, SENT).
   String get folderSectionLabel {
@@ -92,7 +102,9 @@ class HomeController extends GetxController {
     errorMessage.value = null;
     try {
       final result = await _mailRepo.fetchMails(folder: selectedFolder.value);
+      _mailNewEventIds.clear();
       mails.assignAll(result.items);
+      inboxUnreadCount.value = result.inboxUnreadCount;
     } on DioException catch (e) {
       errorMessage.value =
           e.response?.data is Map && (e.response!.data as Map)['message'] != null
@@ -121,11 +133,18 @@ class HomeController extends GetxController {
     );
 
     _socket!.on('mail:new', (data) {
-      if (selectedFolder.value != HomeFolder.inbox) return;
       if (data is! Map) return;
-      final raw = data['mail'];
-      if (raw is! Map) return;
-      final map = Map<String, dynamic>.from(raw);
+      final rawMail = data['mail'];
+      if (rawMail is! Map) return;
+      final map = Map<String, dynamic>.from(rawMail);
+      final folder = '${map['folder'] ?? 'INBOX'}'.trim();
+      if (folder == HomeFolder.inbox) {
+        final id = '${map['id'] ?? ''}'.trim();
+        if (id.isNotEmpty && _mailNewEventIds.add(id)) {
+          inboxUnreadCount.value = inboxUnreadCount.value + 1;
+        }
+      }
+      if (selectedFolder.value != HomeFolder.inbox) return;
       final item = MailListItem.fromJson(map);
       if (item.id.isEmpty) return;
       if (mails.any((m) => m.id == item.id)) return;
