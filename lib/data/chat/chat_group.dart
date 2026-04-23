@@ -5,6 +5,8 @@ class ChatGroupMember {
     required this.email,
     required this.status,
     required this.isAdmin,
+    this.isOnline = false,
+    this.avatarUrl = '',
   });
 
   final String userId;
@@ -12,6 +14,8 @@ class ChatGroupMember {
   final String email;
   final String status;
   final bool isAdmin;
+  final bool isOnline;
+  final String avatarUrl;
 
   bool get isAccepted => status.toLowerCase() == 'accepted';
 
@@ -23,6 +27,8 @@ class ChatGroupMember {
       email: '${json['email'] ?? ''}'.trim(),
       status: status.isEmpty ? 'pending' : status,
       isAdmin: json['isAdmin'] == true || json['role'] == 'admin',
+      isOnline: json['isOnline'] == true || json['online'] == true,
+      avatarUrl: '${json['avatarUrl'] ?? json['image'] ?? ''}'.trim(),
     );
   }
 }
@@ -34,6 +40,9 @@ class ChatGroupInfo {
     required this.groupImage,
     required this.description,
     required this.createdBy,
+    this.createdAt,
+    this.memberCount = 0,
+    this.inviteLink = '',
     required this.members,
   });
 
@@ -42,6 +51,9 @@ class ChatGroupInfo {
   final String groupImage;
   final String description;
   final String createdBy;
+  final DateTime? createdAt;
+  final int memberCount;
+  final String inviteLink;
   final List<ChatGroupMember> members;
 
   factory ChatGroupInfo.fromJson(Map<String, dynamic> json) {
@@ -59,7 +71,37 @@ class ChatGroupInfo {
       groupImage: '${json['groupImage'] ?? json['image'] ?? ''}'.trim(),
       description: '${json['description'] ?? ''}'.trim(),
       createdBy: '${json['createdBy'] ?? ''}'.trim(),
+      createdAt: DateTime.tryParse('${json['createdAt'] ?? ''}'),
+      memberCount: int.tryParse('${json['memberCount'] ?? members.where((m) => m.isAccepted).length}') ??
+          members.where((m) => m.isAccepted).length,
+      inviteLink: '${json['inviteLink'] ?? ''}'.trim(),
       members: members,
+    );
+  }
+}
+
+class ChatGroupSharedItem {
+  const ChatGroupSharedItem({
+    required this.id,
+    required this.type,
+    required this.body,
+    required this.createdAt,
+    required this.senderId,
+  });
+
+  final String id;
+  final String type;
+  final String body;
+  final DateTime? createdAt;
+  final String senderId;
+
+  factory ChatGroupSharedItem.fromJson(Map<String, dynamic> json) {
+    return ChatGroupSharedItem(
+      id: '${json['id'] ?? ''}'.trim(),
+      type: '${json['type'] ?? ''}'.trim(),
+      body: '${json['body'] ?? ''}',
+      createdAt: DateTime.tryParse('${json['createdAt'] ?? ''}'),
+      senderId: '${json['senderId'] ?? ''}'.trim(),
     );
   }
 }

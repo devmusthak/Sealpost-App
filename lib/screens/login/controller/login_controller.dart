@@ -8,6 +8,10 @@ import '../model/login_constants.dart';
 
 /// Login form state + API (GetX).
 class LoginController extends GetxController {
+  LoginController({this.addAccountMode = false});
+
+  final bool addAccountMode;
+
   final emailController = TextEditingController();
   final passwordController = TextEditingController();
 
@@ -45,7 +49,11 @@ class LoginController extends GetxController {
         firebaseUid: LoginConstants.firebaseUidPlaceholder,
       );
       await repo.syncPresenceForActiveSession();
-      Get.off(() => const MainNavigationScreen());
+      if (addAccountMode) {
+        Get.offAll(() => const MainNavigationScreen());
+      } else {
+        Get.off(() => const MainNavigationScreen());
+      }
     } on AuthException catch (e) {
       errorMessage.value = e.message;
       if (e.retryAfterSeconds != null) {

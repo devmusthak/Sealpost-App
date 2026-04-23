@@ -34,10 +34,14 @@ abstract final class ApiEndpoints {
   static const String chatMessageEdit = chatMessages;
   static const String chatGroups = '$chatPrefix/groups';
   static const String chatGroupInvites = '$chatGroups/invites';
+  static const String chatGroupInviteJoin = '$chatGroups/invite/join';
   static const String chatGroupMessages = '$chatGroups/messages';
   static const String chatGroupMessagesRead = '$chatGroupMessages/read';
   static const String chatGroupMessageReaction = '$chatGroupMessages/reaction';
   static const String chatGroupMessageEdit = chatGroupMessages;
+  static String chatGroupMembers(String groupId) => '$chatGroups/$groupId/members';
+  static String chatGroupShared(String groupId) => '$chatGroups/$groupId/shared';
+  static String chatGroupInviteInfo(String inviteId) => '$chatGroups/invite/$inviteId';
 
   static String get socketOrigin {
     final u = Uri.parse(baseUrl);

@@ -20,6 +20,7 @@ import 'screens/chat/chat_forward_opener.dart';
 import 'screens/chat/chat_forward_opener_impl.dart';
 import 'data/mail/mail_repository.dart';
 import 'data/session/session_storage.dart';
+import 'data/session/account_session_manager.dart';
 import 'firebase_options.dart';
 import 'push/firebase_messaging_background.dart';
 import 'screens/splash/view/splash_view.dart';
@@ -38,6 +39,8 @@ Future<void> main() async {
     AuthRepository(Get.find<Dio>(), Get.find<SessionStorage>()),
     permanent: true,
   );
+  final accountManager = await AccountSessionManager().init();
+  Get.put<AccountSessionManager>(accountManager, permanent: true);
   Get.put<MailRepository>(
     MailRepository(Get.find<Dio>()),
     permanent: true,

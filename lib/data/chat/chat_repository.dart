@@ -486,4 +486,104 @@ class ChatRepository {
     if (raw is! Map) throw StateError('Invalid group update response');
     return ChatGroupInfo.fromJson(Map<String, dynamic>.from(raw));
   }
+
+  Future<({List<ChatGroupMember> items, bool hasMore, int total})> fetchGroupMembers({
+    required String groupId,
+    int page = 1,
+    int limit = 25,
+  }) async {
+    final token = Get.find<AuthRepository>().accessToken;
+    if (token == null || token.isEmpty) throw StateError('Not signed in');
+    final res = await _dio.get<dynamic>(
+      ApiEndpoints.chatGroupMembers(groupId),
+      queryParameters: {'page': page, 'limit': limit},
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
+    final raw = res.data;
+    if (raw is! Map) {
+      return (items: <ChatGroupMember>[], hasMore: false, total: 0);
+    }
+    final items = raw['items'];
+    final list = <ChatGroupMember>[];
+    if (items is List) {
+      for (final e in items) {
+        if (e is Map) {
+          list.add(ChatGroupMember.fromJson(Map<String, dynamic>.from(e)));
+        }
+      }
+    }
+    return (
+      items: list,
+      hasMore: raw['hasMore'] == true,
+      total: int.tryParse('${raw['total'] ?? list.length}') ?? list.length,
+    );
+  }
+
+  Future<void> addGroupMembers({
+    required String groupId,
+    required List<String> memberIds,
+  }) async {
+    final token = Get.find<AuthRepository>().accessToken;
+    if (token == null || token.isEmpty) throw StateError('Not signed in');
+    await _dio.post<dynamic>(
+      ApiEndpoints.chatGroupMembers(groupId),
+      data: {'memberIds': memberIds},
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
+  }
+
+  Future<({List<ChatGroupSharedItem> items, bool hasMore})> fetchGroupSharedContent({
+    required String groupId,
+    required String type,
+    int page = 1,
+    int limit = 30,
+  }) async {
+    final token = Get.find<AuthRepository>().accessToken;
+    if (token == null || token.isEmpty) throw StateError('Not signed in');
+    final res = await _dio.get<dynamic>(
+      ApiEndpoints.chatGroupShared(groupId),
+      queryParameters: {
+        'type': type,
+        'page': page,
+        'limit': limit,
+      },
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
+    final raw = res.data;
+    if (raw is! Map) {
+      return (items: <ChatGroupSharedItem>[], hasMore: false);
+    }
+    final items = raw['items'];
+    final list = <ChatGroupSharedItem>[];
+    if (items is List) {
+      for (final e in items) {
+        if (e is Map) {
+          list.add(ChatGroupSharedItem.fromJson(Map<String, dynamic>.from(e)));
+        }
+      }
+    }
+    return (items: list, hasMore: raw['hasMore'] == true);
+  }
+
+  Future<Map<String, dynamic>> fetchGroupInviteInfo(String inviteId) async {
+    final token = Get.find<AuthRepository>().accessToken;
+    if (token == null || token.isEmpty) throw StateError('Not signed in');
+    final res = await _dio.get<dynamic>(
+      ApiEndpoints.chatGroupInviteInfo(inviteId),
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
+    final raw = res.data;
+    if (raw is! Map) throw StateError('Invalid invite info response');
+    return Map<String, dynamic>.from(raw);
+  }
+
+  Future<void> joinGroupByInvite(String inviteId) async {
+    final token = Get.find<AuthRepository>().accessToken;
+    if (token == null || token.isEmpty) throw StateError('Not signed in');
+    await _dio.post<dynamic>(
+      ApiEndpoints.chatGroupInviteJoin,
+      data: {'inviteId': inviteId},
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
+  }
 }

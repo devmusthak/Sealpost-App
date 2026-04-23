@@ -19,6 +19,7 @@ class AuthRepository {
   String? get accessToken => _session?.token;
 
   String? get userId => _session?.userId;
+  String? get activeAccountId => _sessionStorage.activeAccountId;
 
   /// [firebaseUid] — set when Firebase Auth is wired; send `''` until then (server clears field).
   Future<void> login({
@@ -116,6 +117,17 @@ class AuthRepository {
     }
     _session = s;
     return true;
+  }
+
+  Future<List<SessionAccountIdentity>> loadAccountIdentities() {
+    return _sessionStorage.loadAccountIdentities();
+  }
+
+  Future<bool> switchAccount(String accountId) async {
+    final switched = await _sessionStorage.switchActiveAccount(accountId);
+    if (!switched) return false;
+    _session = await _sessionStorage.load();
+    return _session != null;
   }
 
   Future<void> logout() async {

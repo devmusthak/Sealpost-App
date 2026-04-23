@@ -77,6 +77,8 @@ PODS:
   - Flutter (1.0.0)
   - flutter_local_notifications (0.0.1):
     - Flutter
+  - flutter_secure_storage (6.0.0):
+    - Flutter
   - gal (1.0.0):
     - Flutter
     - FlutterMacOS
@@ -146,6 +148,7 @@ DEPENDENCIES:
   - firebase_messaging (from `.symlinks/plugins/firebase_messaging/ios`)
   - Flutter (from `Flutter`)
   - flutter_local_notifications (from `.symlinks/plugins/flutter_local_notifications/ios`)
+  - flutter_secure_storage (from `.symlinks/plugins/flutter_secure_storage/ios`)
   - gal (from `.symlinks/plugins/gal/darwin`)
   - image_picker_ios (from `.symlinks/plugins/image_picker_ios/ios`)
   - pdfx (from `.symlinks/plugins/pdfx/ios`)
@@ -191,6 +194,8 @@ EXTERNAL SOURCES:
     :path: Flutter
   flutter_local_notifications:
     :path: ".symlinks/plugins/flutter_local_notifications/ios"
+  flutter_secure_storage:
+    :path: ".symlinks/plugins/flutter_secure_storage/ios"
   gal:
     :path: ".symlinks/plugins/gal/darwin"
   image_picker_ios:
@@ -227,6 +232,7 @@ SPEC CHECKSUMS:
   FirebaseMessaging: 7d6cdbff969127c4151c824fe432f0e301210f15
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
   flutter_local_notifications: 643a3eda1ce1c0599413ca31672536d423dee214
+  flutter_secure_storage: 1ed9476fba7e7a782b22888f956cce43e2c62f13
   gal: baecd024ebfd13c441269ca7404792a7152fde89
   GoogleDataTransport: aae35b7ea0c09004c3797d53c8c41f66f219d6a7
   GoogleUtilities: 00c88b9a86066ef77f0da2fab05f65d7768ed8e1

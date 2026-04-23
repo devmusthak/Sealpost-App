@@ -10,9 +10,24 @@ import '../../../data/chat/chat_media_repository.dart';
 import '../../../data/chat/chat_repository.dart';
 
 class CreateGroupScreen extends StatefulWidget {
-  const CreateGroupScreen({super.key, required this.friendContacts});
+  const CreateGroupScreen({
+    super.key,
+    required this.friendContacts,
+    this.editGroupId,
+    this.initialName,
+    this.initialDescription,
+    this.initialImageUrl,
+    this.initialMemberIds = const [],
+  });
 
   final List<ChatContact> friendContacts;
+  final String? editGroupId;
+  final String? initialName;
+  final String? initialDescription;
+  final String? initialImageUrl;
+  final List<String> initialMemberIds;
+
+  bool get isEditMode => editGroupId != null && editGroupId!.trim().isNotEmpty;
 
   @override
   State<CreateGroupScreen> createState() => _CreateGroupScreenState();
@@ -23,7 +38,22 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   final _descCtrl = TextEditingController();
   final _pickedMemberIds = <String>{};
   XFile? _pickedImage;
+  String _initialImageUrl = '';
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl.text = (widget.initialName ?? '').trim();
+    _descCtrl.text = (widget.initialDescription ?? '').trim();
+    _initialImageUrl = (widget.initialImageUrl ?? '').trim();
+    if (widget.initialMemberIds.isNotEmpty) {
+      final allowed = widget.friendContacts.map((e) => e.id).toSet();
+      for (final id in widget.initialMemberIds) {
+        if (allowed.contains(id)) _pickedMemberIds.add(id);
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -42,7 +72,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
     setState(() => _pickedImage = file);
   }
 
-  Future<void> _createGroup() async {
+  Future<void> _submitGroup() async {
     if (_busy) return;
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) {
@@ -51,7 +81,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       );
       return;
     }
-    if (_pickedMemberIds.isEmpty) {
+    if (!widget.isEditMode && _pickedMemberIds.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please select at least one member')),
       );
@@ -59,24 +89,48 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
     }
     setState(() => _busy = true);
     try {
-      String imageUrl = '';
+      String imageUrl = _initialImageUrl;
       final picked = _pickedImage;
       if (picked != null) {
         final up = await Get.find<ChatMediaRepository>().uploadImage(picked);
         imageUrl = up.url;
       }
-      await Get.find<ChatRepository>().createGroup(
-        groupName: name,
-        groupImage: imageUrl.isEmpty ? null : imageUrl,
-        description: _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
-        memberIds: _pickedMemberIds.toList(),
-      );
+      if (widget.isEditMode) {
+        final groupId = widget.editGroupId!.trim();
+        await Get.find<ChatRepository>().updateGroupInfo(
+          groupId: groupId,
+          groupName: name,
+          description: _descCtrl.text.trim(),
+          groupImage: imageUrl,
+        );
+        final initialSet = widget.initialMemberIds.toSet();
+        final addIds = _pickedMemberIds.where((id) => !initialSet.contains(id)).toList();
+        if (addIds.isNotEmpty) {
+          await Get.find<ChatRepository>().addGroupMembers(
+            groupId: groupId,
+            memberIds: addIds,
+          );
+        }
+      } else {
+        await Get.find<ChatRepository>().createGroup(
+          groupName: name,
+          groupImage: imageUrl.isEmpty ? null : imageUrl,
+          description: _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
+          memberIds: _pickedMemberIds.toList(),
+        );
+      }
       if (!mounted) return;
       Navigator.of(context).pop(true);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not create group: $e')),
+        SnackBar(
+          content: Text(
+            widget.isEditMode
+                ? 'Could not update group: $e'
+                : 'Could not create group: $e',
+          ),
+        ),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -90,7 +144,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF202124),
         foregroundColor: Colors.white,
-        title: const Text('Create Group'),
+        title: Text(widget.isEditMode ? 'Edit Group' : 'Create Group'),
       ),
       body: SafeArea(
         child: Column(
@@ -107,9 +161,13 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                       backgroundColor: const Color(0xFF3A3B3C),
                       backgroundImage: _pickedImage != null
                           ? FileImage(File(_pickedImage!.path))
-                          : null,
+                          : (_initialImageUrl.isNotEmpty
+                                ? NetworkImage(_initialImageUrl)
+                                : null),
                       child: _pickedImage == null
-                          ? const Icon(Icons.group, color: Colors.white, size: 28)
+                          ? (_initialImageUrl.isEmpty
+                                ? const Icon(Icons.group, color: Colors.white, size: 28)
+                                : null)
                           : null,
                     ),
                   ),
@@ -202,7 +260,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
               child: SizedBox(
                 width: double.infinity,
                 child: FilledButton(
-                  onPressed: _busy ? null : _createGroup,
+                  onPressed: _busy ? null : _submitGroup,
                   style: FilledButton.styleFrom(
                     backgroundColor: const Color(0xFF53C5FF),
                     foregroundColor: Colors.black,
@@ -214,7 +272,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                           height: 20,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Text('Create Group'),
+                      : Text(widget.isEditMode ? 'Save Group' : 'Create Group'),
                 ),
               ),
             ),

@@ -13,6 +13,7 @@ import '../../../data/auth/auth_repository.dart';
 import '../../../data/mail/mail_list_item.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/app_text.dart';
+import '../../../widgets/account_switch_sheet.dart';
 import '../../compose/view/compose_view.dart';
 import '../../mail_detail/view/mail_detail_view.dart';
 import '../controller/home_controller.dart';
@@ -117,13 +118,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           case 'send':
                             unawaited(_controller.selectFolder(HomeFolder.sent));
                             break;
-                          case 'profile':
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Profile coming soon'),
-                                duration: Duration(seconds: 1),
-                              ),
-                            );
+                          case 'switch_account':
+                            unawaited(AccountSwitchSheet.show(context));
                             break;
                         }
                       },
@@ -399,12 +395,12 @@ class _HomeSearchAppBar extends StatelessWidget {
                 label: 'Send',
               ),
             ),
-             PopupMenuDivider(height: 1 , color: Colors.white.withValues(alpha: 0.08)),
+            PopupMenuDivider(height: 1 , color: Colors.white.withValues(alpha: 0.08)),
             PopupMenuItem<String>(
-              value: 'profile',
+              value: 'switch_account',
               child: ProfileMenuItem(
-                icon: Icons.person_outline,
-                label: 'Profile',
+                icon: Icons.switch_account_rounded,
+                label: 'Switch account',
               ),
             ),
           ],

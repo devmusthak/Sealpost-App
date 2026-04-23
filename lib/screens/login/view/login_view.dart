@@ -11,7 +11,9 @@ import '../widgets/login_header_panel.dart';
 
 /// Login screen (view). Uses [LoginController] for state.
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  const LoginScreen({super.key, this.addAccountMode = false});
+
+  final bool addAccountMode;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -25,7 +27,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
-    _login = Get.put(LoginController());
+    _login = Get.put(LoginController(addAccountMode: widget.addAccountMode));
     _termsTap = TapGestureRecognizer()
       ..onTap = () => Get.to(() => const TermsOfServiceView());
     _dpaTap = TapGestureRecognizer()

@@ -40,6 +40,7 @@ import '../widgets/chat_message_document.dart';
 import '../widgets/chat_message_images.dart';
 import '../widgets/chat_message_voice.dart';
 import '../widgets/chat_message_video.dart';
+import '../widgets/group_invite_preview_widget.dart';
 import 'chat_image_preview_screen.dart';
 import 'chat_image_viewer_screen.dart';
 import 'chat_pdf_viewer_screen.dart';
@@ -149,6 +150,7 @@ class ChatThreadScreen extends StatefulWidget {
     required this.contact,
     this.forwardMessagesOnOpen,
     this.shareMediaOnOpen,
+    this.initialScrollToMessageId,
   });
 
   final ChatContact contact;
@@ -159,6 +161,7 @@ class ChatThreadScreen extends StatefulWidget {
 
   /// When opening from the OS share sheet: image/video preview then send (same as in-thread attach).
   final List<SharedMediaFile>? shareMediaOnOpen;
+  final String? initialScrollToMessageId;
 
   @override
   State<ChatThreadScreen> createState() => _ChatThreadScreenState();
@@ -188,6 +191,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
 
   /// Jump-to-latest arrow only after at least one older page was loaded (not just scrolling in first 50).
   bool _didLoadOlderPage = false;
+  bool _didInitialExternalScroll = false;
   bool _peerTyping = false;
   bool _peerVoiceRecording = false;
   Timer? _peerTypingClear;
@@ -2027,6 +2031,14 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         _maybeUpgradeDeliveryFromPeerPresence();
+        final initialJump = widget.initialScrollToMessageId?.trim() ?? '';
+        if (!_didInitialExternalScroll && initialJump.isNotEmpty) {
+          _didInitialExternalScroll = true;
+          _initialOpenPositionApplied = true;
+          _scrollToQuotedMessage(initialJump);
+          _scheduleFloatingDateUpdate();
+          return;
+        }
         if (!_initialOpenPositionApplied) {
           unawaited(_applyInitialUnreadOpenPosition());
         } else {
@@ -3344,10 +3356,6 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                     }
                   },
                 ),
-              IconButton(
-                icon: const Icon(Icons.more_vert_rounded),
-                onPressed: () {},
-              ),
             ],
           ],
         ),
@@ -6343,6 +6351,22 @@ class _MessageBubble extends StatelessWidget {
     return t;
   }
 
+  static String? _extractGroupInviteId(String? rawUrl) {
+    final url = (rawUrl ?? '').trim();
+    if (url.isEmpty) return null;
+    final u = Uri.tryParse(url);
+    if (u == null) return null;
+    final seg = u.pathSegments;
+    if (seg.length < 3) return null;
+    final inviteSeg = seg[0].toLowerCase();
+    if ((inviteSeg != 'invite' && inviteSeg != 'inivte') || seg[1] != 'group') {
+      return null;
+    }
+    final id = seg[2].trim();
+    if (RegExp(r'^[a-fA-F0-9]{24}$').hasMatch(id)) return id;
+    return null;
+  }
+
   Widget _inlineReplyStrip(ChatReplyQuote q) {
     final resolved = replySenderLabelResolver?.call(q).trim() ?? '';
     final who = resolved.isNotEmpty
@@ -6447,6 +6471,9 @@ class _MessageBubble extends StatelessWidget {
             docEnvelope != null)
         ? null
         : LinkPreviewService.extractFirstHttpUrl(bodyText);
+    final inviteId = _extractGroupInviteId(previewUrl);
+    final hideInviteLinkText =
+        inviteId != null && previewUrl != null && bodyText.trim() == previewUrl.trim();
     final meta = _metaStyle(context);
     final q = msg.replyTo;
     const baseRowBottom = 6.0;
@@ -6972,17 +6999,24 @@ class _MessageBubble extends StatelessWidget {
                         if (previewUrl != null)
                           Padding(
                             padding: const EdgeInsets.only(bottom: 8),
-                            child: ChatLinkPreviewCard(
-                              key: ValueKey('lp:${msg.id}|$previewUrl'),
-                              url: previewUrl,
-                              isOutgoing: true,
-                            ),
+                            child: (inviteId != null)
+                                ? GroupInvitePreviewWidget(
+                                    key: ValueKey('gi:${msg.id}|$previewUrl'),
+                                    inviteId: inviteId,
+                                    outgoing: true,
+                                  )
+                                : ChatLinkPreviewCard(
+                                    key: ValueKey('lp:${msg.id}|$previewUrl'),
+                                    url: previewUrl,
+                                    isOutgoing: true,
+                                  ),
                           ),
-                        _LinkifiedMessageBody(
-                          text: bodyText,
-                          baseStyle: GoogleFonts.ptSans(textStyle: _bodyStyle),
-                          onEmailTap: onEmailTap,
-                        ),
+                        if (!hideInviteLinkText)
+                          _LinkifiedMessageBody(
+                            text: bodyText,
+                            baseStyle: GoogleFonts.ptSans(textStyle: _bodyStyle),
+                            onEmailTap: onEmailTap,
+                          ),
                         const SizedBox(height: 4),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.end,
@@ -7410,17 +7444,24 @@ class _MessageBubble extends StatelessWidget {
                       if (previewUrl != null)
                         Padding(
                           padding: const EdgeInsets.only(bottom: 8),
-                          child: ChatLinkPreviewCard(
-                            key: ValueKey('lp:${msg.id}|$previewUrl'),
-                            url: previewUrl,
-                            isOutgoing: false,
-                          ),
+                          child: (inviteId != null)
+                              ? GroupInvitePreviewWidget(
+                                  key: ValueKey('gi:${msg.id}|$previewUrl'),
+                                  inviteId: inviteId,
+                                  outgoing: false,
+                                )
+                              : ChatLinkPreviewCard(
+                                  key: ValueKey('lp:${msg.id}|$previewUrl'),
+                                  url: previewUrl,
+                                  isOutgoing: false,
+                                ),
                         ),
-                      _LinkifiedMessageBody(
-                        text: bodyText,
-                        baseStyle: GoogleFonts.ptSans(textStyle: _bodyStyle),
-                        onEmailTap: onEmailTap,
-                      ),
+                      if (!hideInviteLinkText)
+                        _LinkifiedMessageBody(
+                          text: bodyText,
+                          baseStyle: GoogleFonts.ptSans(textStyle: _bodyStyle),
+                          onEmailTap: onEmailTap,
+                        ),
                       const SizedBox(height: 5),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.end,

@@ -14,6 +14,7 @@ import '../../../data/chat/chat_repository.dart';
 import '../../../data/chat/chat_user.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/chat_action_dialog.dart';
+import '../../../widgets/account_switch_sheet.dart';
 import '../chat_open_thread.dart';
 import '../controller/chat_controller.dart';
 import 'create_group_view.dart';
@@ -89,6 +90,20 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     await _showActionModal(user);
   }
 
+  Future<void> _openAddFriendSearch() async {
+    if (!mounted) return;
+    // Let popup menu dismissal finish before pushing SearchDelegate route.
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted) return;
+    await showSearch(
+      context: context,
+      delegate: ChatSearchDelegate(
+        repo: Get.find<ChatRepository>(),
+        onUserTap: _onSearchUserTap,
+      ),
+    );
+  }
+
   ChatContact _chatContactFromUser(ChatUser u) {
     return ChatContact(
       id: u.id,
@@ -127,13 +142,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       return;
     }
     if (value == 'Add friend') {
-      await showSearch(
-        context: context,
-        delegate: ChatSearchDelegate(
-          repo: Get.find<ChatRepository>(),
-          onUserTap: _onSearchUserTap,
-        ),
-      );
+      await _openAddFriendSearch();
+      return;
+    }
+    if (value == 'Switch account') {
+      await AccountSwitchSheet.show(context);
       return;
     }
   }
@@ -595,10 +608,10 @@ class _ChatSearchHeader extends StatelessWidget {
             ),
             PopupMenuDivider(height: 1, color: Color(0x14FFFFFF)),
             PopupMenuItem<String>(
-              value: 'Profile',
+              value: 'Switch account',
               child: _ProfileMenuItem(
-                icon: Icons.person_outline,
-                label: 'Profile',
+                icon: Icons.switch_account_rounded,
+                label: 'Switch account',
               ),
             ),
           ],
