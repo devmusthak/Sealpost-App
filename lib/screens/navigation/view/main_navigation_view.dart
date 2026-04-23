@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import '../../../core/share/share_receive_service.dart';
 import '../../chat/controller/chat_controller.dart';
 import '../../chat/view/chat_view.dart';
 import '../../home/controller/home_controller.dart';
@@ -21,6 +22,31 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     HomeScreen(),
     ChatScreen(),
   ];
+
+  Worker? _shareTabWorker;
+
+  @override
+  void initState() {
+    super.initState();
+    if (Get.isRegistered<ShareReceiveService>()) {
+      final s = Get.find<ShareReceiveService>();
+      final initial = s.pending.value;
+      if (initial != null && initial.isNotEmpty) {
+        _selectedIndex = 1;
+      }
+      _shareTabWorker = ever(s.pending, (list) {
+        if (list != null && list.isNotEmpty && mounted) {
+          setState(() => _selectedIndex = 1);
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _shareTabWorker?.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

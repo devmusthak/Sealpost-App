@@ -30,6 +30,13 @@ dependencies:
   app_links: ^6.4.1
   flutter_local_notifications: ^21.0.0
   emoji_picker_flutter: ^4.4.0
+  image_picker: ^1.2.1
+  record: ^6.1.1
+  audioplayers: ^6.1.0
+  crypto: ^3.0.7
+  gal: ^2.3.2
+  receive_sharing_intent: ^1.8.1
+  downloadsfolder: ^1.2.0
 
 dev_dependencies:
   flutter_test:
@@ -44,4 +51,4 @@ flutter:
     - assets/splash-bg.svg
     - assets/logo.svg
     - assets/head-login.svg
-    - assets/chat.webp
+    - assets/chat.png

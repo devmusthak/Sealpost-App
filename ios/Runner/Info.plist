@@ -85,6 +85,20 @@
 				<string>mailto</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>ShareMedia-$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+			</array>
+		</dict>
 	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Sealpost needs access to your photo library to send images in chat.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Sealpost saves images you choose to your photo library when you tap Save.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Sealpost needs microphone access to record voice messages in chat.</string>
 </dict>
 </plist>

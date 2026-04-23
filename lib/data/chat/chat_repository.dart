@@ -217,4 +217,34 @@ class ChatRepository {
     }
     return ChatMessageDto.fromJson(Map<String, dynamic>.from(msgRaw));
   }
+
+  /// Sender-only; server rejects outside the edit window.
+  Future<ChatMessageDto> editChatMessage({
+    required String peerId,
+    required String messageId,
+    required String body,
+  }) async {
+    final token = Get.find<AuthRepository>().accessToken;
+    if (token == null || token.isEmpty) {
+      throw StateError('Not signed in');
+    }
+    final res = await _dio.patch<dynamic>(
+      ApiEndpoints.chatMessageEdit,
+      data: {
+        'peerId': peerId,
+        'messageId': messageId,
+        'body': body,
+      },
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
+    final raw = res.data;
+    if (raw is! Map) {
+      throw StateError('Invalid edit response');
+    }
+    final msgRaw = raw['message'];
+    if (msgRaw is! Map) {
+      throw StateError('Invalid edit response');
+    }
+    return ChatMessageDto.fromJson(Map<String, dynamic>.from(msgRaw));
+  }
 }

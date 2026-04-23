@@ -8,6 +8,7 @@ import 'package:get/get.dart';
 import '../../data/auth/auth_repository.dart';
 import '../../data/chat/chat_contact.dart';
 import '../../data/mail/mail_list_item.dart';
+import '../../screens/chat/controller/chat_controller.dart';
 import '../../screens/chat/view/chat_thread_view.dart';
 import '../../screens/home/controller/home_controller.dart';
 import '../../screens/mail_detail/view/mail_detail_view.dart';
@@ -23,7 +24,9 @@ class PendingMailNotification extends GetxController {
       mailId != null && mailId!.isNotEmpty && preview != null;
 
   void setFromMessage(RemoteMessage message) {
-    applyFromData(Map<String, String>.from(message.data.map((k, v) => MapEntry(k, '$v'))));
+    applyFromData(
+      Map<String, String>.from(message.data.map((k, v) => MapEntry(k, '$v'))),
+    );
   }
 
   void applyFromData(Map<String, String> d) {
@@ -65,7 +68,9 @@ class PendingChatNotification extends GetxController {
   bool get hasPending => contact != null;
 
   void setFromMessage(RemoteMessage message) {
-    applyFromData(Map<String, String>.from(message.data.map((k, v) => MapEntry(k, '$v'))));
+    applyFromData(
+      Map<String, String>.from(message.data.map((k, v) => MapEntry(k, '$v'))),
+    );
   }
 
   void applyFromData(Map<String, String> d) {
@@ -138,7 +143,21 @@ class PushNotificationService {
       // Android: FCM does not show a heads-up while app is open; use local notifs.
       // iOS/macOS: [setForegroundNotificationPresentationOptions] shows the system banner.
       if (defaultTargetPlatform == TargetPlatform.android) {
-        unawaited(LocalNotificationService.showForegroundRemoteMessage(message));
+        final d = message.data;
+        if (d['type'] == 'new_chat_message') {
+          final from = '${d['fromUserId'] ?? ''}'.trim();
+          if (from.isNotEmpty &&
+              Get.isRegistered<ChatController>() &&
+              Get.find<ChatController>().openConversationPeerId == from) {
+            unawaited(
+              LocalNotificationService.clearChatNotificationsForPeer(from),
+            );
+            return;
+          }
+        }
+        unawaited(
+          LocalNotificationService.showForegroundRemoteMessage(message),
+        );
       }
     });
 
@@ -218,11 +237,7 @@ class PushNotificationService {
     }
     await Future<void>.delayed(Duration.zero);
     Get.to<void>(
-      () => MailDetailScreen(
-        mailId: id,
-        preview: preview,
-        folderKey: folder,
-      ),
+      () => MailDetailScreen(mailId: id, preview: preview, folderKey: folder),
     );
   }
 
@@ -245,6 +260,7 @@ class PushNotificationService {
   }
 
   static Future<void> _openChatThread(ChatContact contact) async {
+    await LocalNotificationService.clearChatNotificationsForPeer(contact.id);
     await Future<void>.delayed(Duration.zero);
     Get.to<void>(() => ChatThreadScreen(contact: contact));
   }

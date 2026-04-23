@@ -64,6 +64,7 @@ class ChatMessageDto {
     this.clientId,
     required this.createdAt,
     this.readAt,
+    this.editedAt,
     this.replyTo,
     this.reactions = const [],
   });
@@ -75,6 +76,8 @@ class ChatMessageDto {
   final String? clientId;
   final DateTime createdAt;
   final DateTime? readAt;
+  /// Server sets on first successful edit (sender-only, time window).
+  final DateTime? editedAt;
   final ChatReplyQuote? replyTo;
   final List<ChatReactionEntry> reactions;
 
@@ -106,6 +109,7 @@ class ChatMessageDto {
           : null,
       createdAt: _parseDate(json['createdAt']) ?? DateTime.now().toUtc(),
       readAt: _parseDate(json['readAt']),
+      editedAt: _parseDate(json['editedAt']),
       replyTo: ChatReplyQuote.fromJson(json['replyTo']),
       reactions: _reactionsFromJson(json['reactions']),
     );

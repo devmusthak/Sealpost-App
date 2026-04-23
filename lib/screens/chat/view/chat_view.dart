@@ -4,19 +4,25 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
+import '../../../core/share/share_receive_service.dart';
 import '../../../data/auth/auth_repository.dart';
+import '../../../data/chat/chat_list_last_message_preview.dart';
 import '../../../data/chat/chat_contact.dart';
 import '../../../data/chat/chat_repository.dart';
 import '../../../data/chat/chat_user.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/chat_action_dialog.dart';
+import '../chat_open_thread.dart';
 import '../controller/chat_controller.dart';
 import 'chat_search_delegate.dart';
-import 'chat_thread_view.dart';
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key});
+  const ChatScreen({super.key, this.forwardMessageBodies});
+
+  /// One outgoing bubble per entry when the user picks a chat (forward flow).
+  final List<String>? forwardMessageBodies;
 
   static const overlay = Color(0xFF121212);
   static const appBarSurface = Color(0xFF202124);
@@ -30,17 +36,27 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   late final ChatController _controller;
 
+  bool get _pickingForward =>
+      widget.forwardMessageBodies != null &&
+      widget.forwardMessageBodies!.any((s) => s.trim().isNotEmpty);
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _controller = Get.put(ChatController());
+    if (Get.isRegistered<ChatController>()) {
+      _controller = Get.find<ChatController>();
+    } else {
+      _controller = Get.put(ChatController());
+    }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    Get.delete<ChatController>();
+    if (!_pickingForward) {
+      Get.delete<ChatController>();
+    }
     super.dispose();
   }
 
@@ -88,10 +104,26 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   void _openChatThread(ChatContact contact) {
     if (!mounted) return;
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => ChatThreadScreen(contact: contact),
-      ),
+    final raw = widget.forwardMessageBodies;
+    List<String>? filtered;
+    if (raw != null && raw.isNotEmpty) {
+      filtered = raw.map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      if (filtered.isEmpty) filtered = null;
+    }
+    List<SharedMediaFile>? share;
+    if (!_pickingForward && Get.isRegistered<ShareReceiveService>()) {
+      final s = Get.find<ShareReceiveService>();
+      final p = s.pending.value;
+      if (p != null && p.isNotEmpty) {
+        share = List<SharedMediaFile>.from(p);
+        unawaited(s.clearPending());
+      }
+    }
+    openChatThread(
+      context,
+      contact,
+      forwardBodies: filtered,
+      shareMediaOnOpen: share,
     );
   }
 
@@ -200,7 +232,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       userName.isNotEmpty ? userName : (auth?.email ?? '?'),
     );
 
-    return Scaffold(
+    final scaffold = Scaffold(
       backgroundColor: ChatScreen.overlay,
       body: Stack(
         fit: StackFit.expand,
@@ -215,6 +247,70 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (_pickingForward)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 6, 12, 4),
+                    child: Row(
+                      children: [
+                        IconButton(
+                          tooltip: 'Back',
+                          icon: const Icon(
+                            Icons.arrow_back_rounded,
+                            color: Colors.white,
+                          ),
+                          onPressed: () => Navigator.of(context).pop(),
+                        ),
+                        Expanded(
+                          child: Text(
+                            'Select a chat to forward',
+                            style: GoogleFonts.ptSans(
+                              color: Colors.white,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                Obx(() {
+                  if (!Get.isRegistered<ShareReceiveService>()) {
+                    return const SizedBox.shrink();
+                  }
+                  final pending = Get.find<ShareReceiveService>().pending.value;
+                  if (pending == null || pending.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 6, 12, 4),
+                    child: Row(
+                      children: [
+                        IconButton(
+                          tooltip: 'Cancel share',
+                          icon: const Icon(
+                            Icons.close_rounded,
+                            color: Colors.white,
+                          ),
+                          onPressed: () {
+                            unawaited(
+                              Get.find<ShareReceiveService>().clearPending(),
+                            );
+                          },
+                        ),
+                        Expanded(
+                          child: Text(
+                            'Sharing — tap a friend to send',
+                            style: GoogleFonts.ptSans(
+                              color: Colors.white,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
                   child: _ChatSearchHeader(
@@ -249,6 +345,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     return _ChatList(
                       items: _controller.contacts,
                       onTap: _onContactTap,
+                      isPeerTyping: _controller.isPeerTyping,
                     );
                   }),
                 ),
@@ -258,6 +355,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         ],
       ),
     );
+
+    return scaffold;
   }
 
   Future<void> _onContactTap(ChatContact item) async {
@@ -485,9 +584,11 @@ class _ChatList extends StatelessWidget {
   const _ChatList({
     required this.items,
     required this.onTap,
+    required this.isPeerTyping,
   });
   final List<ChatContact> items;
   final Future<void> Function(ChatContact item) onTap;
+  final bool Function(String peerId) isPeerTyping;
 
   @override
   Widget build(BuildContext context) {
@@ -505,6 +606,7 @@ class _ChatList extends StatelessWidget {
         return _ChatThreadTile(
           item: items[index],
           index: index,
+          isPeerTyping: isPeerTyping(items[index].id),
           onTap: () => onTap(items[index]),
         );
       },
@@ -516,11 +618,13 @@ class _ChatThreadTile extends StatelessWidget {
   const _ChatThreadTile({
     required this.item,
     required this.index,
+    required this.isPeerTyping,
     required this.onTap,
   });
 
   final ChatContact item;
   final int index;
+  final bool isPeerTyping;
   final VoidCallback onTap;
 
   static const _avatars = [
@@ -596,11 +700,24 @@ class _ChatThreadTile extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    if (item.relationStatus == 'friends' &&
+                    if (item.relationStatus == 'friends' && isPeerTyping) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'typing...',
+                        style: GoogleFonts.ptSans(
+                          color: const Color(0xFF22C55E),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          height: 1.25,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ] else if (item.relationStatus == 'friends' &&
                         item.lastMessage.trim().isNotEmpty) ...[
                       const SizedBox(height: 4),
                       Text(
-                        item.lastMessage,
+                        item.chatListSubtitle,
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.72),
                           fontSize: 14,
@@ -625,7 +742,7 @@ class _ChatThreadTile extends StatelessWidget {
                     ] else if (item.lastMessage.trim().isNotEmpty) ...[
                       const SizedBox(height: 4),
                       Text(
-                        item.lastMessage,
+                        item.chatListSubtitle,
                         style: TextStyle(
                           color: Colors.white.withValues(alpha: 0.72),
                           fontSize: 14,

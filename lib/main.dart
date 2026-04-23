@@ -9,11 +9,15 @@ import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'core/mailto/mailto_link_service.dart';
+import 'core/share/share_receive_service.dart';
 import 'core/push/push_notification_service.dart';
 import 'core/network/auth_interceptor.dart';
 import 'core/network/dio_client.dart';
 import 'data/auth/auth_repository.dart';
+import 'data/chat/chat_media_repository.dart';
 import 'data/chat/chat_repository.dart';
+import 'screens/chat/chat_forward_opener.dart';
+import 'screens/chat/chat_forward_opener_impl.dart';
 import 'data/mail/mail_repository.dart';
 import 'data/session/session_storage.dart';
 import 'firebase_options.dart';
@@ -39,10 +43,16 @@ Future<void> main() async {
     permanent: true,
   );
   Get.put<ChatRepository>(ChatRepository(Get.find<Dio>()), permanent: true);
+  Get.put<ChatMediaRepository>(
+    ChatMediaRepository(Get.find<Dio>()),
+    permanent: true,
+  );
+  Get.put<ChatForwardOpener>(ChatForwardOpenerImpl(), permanent: true);
   Get.put(
     MailtoLinkService(Get.find<SessionStorage>()),
     permanent: true,
   );
+  Get.put(ShareReceiveService(), permanent: true);
   Get.put(PendingMailNotification(), permanent: true);
   Get.put(PendingChatNotification(), permanent: true);
   runApp(const SealpostApp());

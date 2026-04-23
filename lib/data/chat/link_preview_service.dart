@@ -35,6 +35,23 @@ class LinkPreviewService {
     caseSensitive: false,
   );
 
+  /// Hostname-shaped token without scheme (e.g. `google.com`, `www.google.com/path`).
+  static final RegExp _bareHostPattern = RegExp(
+    r'\b(?:www\.)?(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,})'
+    r'(?::\d+)?(?:[/?#][^\s<>\[\]()]*)?',
+    caseSensitive: false,
+  );
+
+  /// Two-label bare matches like `notes.txt` — skip; real hosts like `google.com` stay allowed.
+  static const Set<String> _blockedBareTlds = <String>{
+    'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico',
+    'zip', 'rar', '7z', 'tar', 'gz',
+    'mp3', 'mp4', 'wav', 'm4a', 'mov', 'avi', 'mkv', 'webm',
+    'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods',
+    'csv', 'json', 'xml', 'html', 'htm', 'css', 'js', 'mjs', 'ts', 'tsx',
+    'md', 'rtf', 'log',
+  };
+
   static const int _maxCacheEntries = 120;
   static const int _maxHtmlChars = 500000;
 
@@ -63,6 +80,9 @@ class LinkPreviewService {
       HashMap<String, Future<LinkPreviewData>>();
 
   /// First valid `http`/`https` URL in [text], or `null`.
+  ///
+  /// Recognizes explicit `http(s)://` URLs and bare hosts (`google.com`, `www.google.com/...`),
+  /// normalizing the latter to `https://…` for preview.
   static String? extractFirstHttpUrl(String text) {
     if (text.trim().isEmpty) return null;
     for (final m in _urlPattern.allMatches(text)) {
@@ -75,7 +95,29 @@ class LinkPreviewService {
       if (uri.host.isEmpty) continue;
       return uri.toString();
     }
+    for (final m in _bareHostPattern.allMatches(text)) {
+      if (m.start > 0 && text[m.start - 1] == '@') {
+        continue;
+      }
+      var raw = m.group(0);
+      if (raw == null || raw.isEmpty) continue;
+      raw = _trimTrailingUrlNoise(raw);
+      final prefixed = 'https://$raw';
+      final uri = Uri.tryParse(prefixed);
+      if (uri == null) continue;
+      if (uri.scheme != 'https' || uri.host.isEmpty) continue;
+      if (_shouldSkipBareHostPreview(uri)) continue;
+      return uri.toString();
+    }
     return null;
+  }
+
+  static bool _shouldSkipBareHostPreview(Uri uri) {
+    final labels = uri.host.toLowerCase().split('.');
+    if (labels.length < 2) return true;
+    final tld = labels.last;
+    if (labels.length == 2 && _blockedBareTlds.contains(tld)) return true;
+    return false;
   }
 
   static String _trimTrailingUrlNoise(String s) {
