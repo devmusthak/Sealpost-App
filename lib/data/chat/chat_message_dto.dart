@@ -60,6 +60,9 @@ class ChatMessageDto {
     required this.id,
     required this.senderId,
     required this.recipientId,
+    this.groupId,
+    this.senderName,
+    this.conversationType = 'direct',
     required this.body,
     this.clientId,
     required this.createdAt,
@@ -72,6 +75,9 @@ class ChatMessageDto {
   final String id;
   final String senderId;
   final String recipientId;
+  final String? groupId;
+  final String? senderName;
+  final String conversationType;
   final String body;
   final String? clientId;
   final DateTime createdAt;
@@ -103,6 +109,11 @@ class ChatMessageDto {
       id: '${json['id'] ?? ''}',
       senderId: '${json['senderId'] ?? ''}',
       recipientId: '${json['recipientId'] ?? ''}',
+      groupId: _maybeString(json['groupId'] ?? json['conversationId']),
+      senderName: _maybeString(json['senderName'] ?? json['fromName']),
+      conversationType: '${json['conversationType'] ?? (json['groupId'] != null ? 'group' : 'direct')}'
+          .trim()
+          .toLowerCase(),
       body: '${json['body'] ?? ''}',
       clientId: json['clientId'] != null && '${json['clientId']}'.trim().isNotEmpty
           ? '${json['clientId']}'.trim()
@@ -114,6 +125,13 @@ class ChatMessageDto {
       reactions: _reactionsFromJson(json['reactions']),
     );
   }
+}
+
+String? _maybeString(dynamic v) {
+  if (v == null) return null;
+  final s = '$v'.trim();
+  if (s.isEmpty) return null;
+  return s;
 }
 
 class SendChatMessageResult {

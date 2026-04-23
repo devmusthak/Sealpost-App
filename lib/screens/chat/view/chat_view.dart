@@ -16,6 +16,7 @@ import '../../../theme/app_theme.dart';
 import '../../../widgets/chat_action_dialog.dart';
 import '../chat_open_thread.dart';
 import '../controller/chat_controller.dart';
+import 'create_group_view.dart';
 import 'chat_search_delegate.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -100,6 +101,41 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       timeLabel: '',
       unreadCount: 0,
     );
+  }
+
+  Future<void> _openCreateGroup() async {
+    final friends = _controller.contacts
+        .where((c) => c.relationStatus == 'friends' && !c.isGroupConversation)
+        .toList();
+    final created = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => CreateGroupScreen(friendContacts: friends),
+      ),
+    );
+    if (created == true) {
+      await _controller.refreshContacts();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Group created. Invitations sent.')),
+      );
+    }
+  }
+
+  Future<void> _onHeaderMenuSelected(String value) async {
+    if (value == 'Create group') {
+      await _openCreateGroup();
+      return;
+    }
+    if (value == 'Add friend') {
+      await showSearch(
+        context: context,
+        delegate: ChatSearchDelegate(
+          repo: Get.find<ChatRepository>(),
+          onUserTap: _onSearchUserTap,
+        ),
+      );
+      return;
+    }
   }
 
   void _openChatThread(ChatContact contact) {
@@ -320,6 +356,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     initial: initial,
                     isSelfOnline: _selfOnlineUi,
                     onUserTap: _onSearchUserTap,
+                    onMenuSelected: _onHeaderMenuSelected,
                   ),
                 ),
                 const Padding(
@@ -360,6 +397,51 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _onContactTap(ChatContact item) async {
+    if (item.isGroupConversation) {
+      if (item.isGroupInvitePending) {
+        final parent = context;
+        final groupLabel = item.name.trim().isEmpty ? 'this group' : item.name;
+        await showDialog<void>(
+          context: parent,
+          builder: (dialogContext) {
+            return ChatActionDialog(
+              title: 'Group invitation',
+              subtitle: 'You are invited to join $groupLabel',
+              primaryText: 'Accept',
+              secondaryText: 'Reject',
+              primaryFilled: true,
+              onPrimary: () async {
+                Navigator.of(dialogContext).pop();
+                await Get.find<ChatRepository>().respondGroupInvite(
+                  groupId: item.conversationId,
+                  accept: true,
+                );
+                await _controller.refreshContacts();
+                if (!mounted || !parent.mounted) return;
+                ScaffoldMessenger.of(parent).showSnackBar(
+                  const SnackBar(content: Text('Group invitation accepted')),
+                );
+              },
+              onSecondary: () async {
+                Navigator.of(dialogContext).pop();
+                await Get.find<ChatRepository>().respondGroupInvite(
+                  groupId: item.conversationId,
+                  accept: false,
+                );
+                await _controller.refreshContacts();
+                if (!mounted || !parent.mounted) return;
+                ScaffoldMessenger.of(parent).showSnackBar(
+                  const SnackBar(content: Text('Group invitation rejected')),
+                );
+              },
+            );
+          },
+        );
+        return;
+      }
+      _openChatThread(item);
+      return;
+    }
     if (item.relationStatus == 'friends') {
       _openChatThread(item);
       return;
@@ -428,6 +510,7 @@ class _ChatSearchHeader extends StatelessWidget {
     required this.initial,
     required this.isSelfOnline,
     required this.onUserTap,
+    required this.onMenuSelected,
   });
 
   final Color surfaceColor;
@@ -436,6 +519,7 @@ class _ChatSearchHeader extends StatelessWidget {
   final String initial;
   final bool isSelfOnline;
   final Future<void> Function(ChatUser user) onUserTap;
+  final Future<void> Function(String value) onMenuSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -518,6 +602,7 @@ class _ChatSearchHeader extends StatelessWidget {
               ),
             ),
           ],
+          onSelected: (value) => unawaited(onMenuSelected(value)),
           child: Stack(
             clipBehavior: Clip.none,
             children: [
@@ -639,6 +724,10 @@ class _ChatThreadTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final avatarColor = _avatars[index % _avatars.length];
     final initial = item.name.trim().isEmpty ? '?' : item.name.trim()[0].toUpperCase();
+    final showTyping = !item.isGroupConversation &&
+        item.relationStatus == 'friends' &&
+        isPeerTyping;
+    final groupLogo = item.groupImage.trim();
 
     return Material(
       color: Colors.transparent,
@@ -652,35 +741,80 @@ class _ChatThreadTile extends StatelessWidget {
               Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  CircleAvatar(
-                    radius: 22,
-                    backgroundColor: avatarColor,
-                    child: Text(
-                      initial,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 18,
-                      ),
+                  SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: ClipOval(
+                      child: groupLogo.isNotEmpty
+                          ? Image.network(
+                              groupLogo,
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) {
+                                return DecoratedBox(
+                                  decoration: BoxDecoration(color: avatarColor),
+                                  child: Center(
+                                    child: Text(
+                                      initial,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 18,
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            )
+                          : DecoratedBox(
+                              decoration: BoxDecoration(color: avatarColor),
+                              child: Center(
+                                child: Text(
+                                  initial,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 18,
+                                  ),
+                                ),
+                              ),
+                            ),
                     ),
                   ),
                   Positioned(
                     right: 1,
                     bottom: 1,
-                    child: Container(
-                      width: 11,
-                      height: 11,
-                      decoration: BoxDecoration(
-                        color: item.isOnline
-                            ? const Color(0xFF22C55E)
-                            : const Color(0xFF6B7280),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: ChatScreen.overlay,
-                          width: 1.6,
-                        ),
-                      ),
-                    ),
+                    child: item.isGroupConversation
+                        ? Container(
+                            width: 14,
+                            height: 14,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1F2937),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: ChatScreen.overlay,
+                                width: 1.4,
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.groups_2_rounded,
+                              size: 9,
+                              color: Colors.white,
+                            ),
+                          )
+                        : Container(
+                            width: 11,
+                            height: 11,
+                            decoration: BoxDecoration(
+                              color: item.isOnline
+                                  ? const Color(0xFF22C55E)
+                                  : const Color(0xFF6B7280),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: ChatScreen.overlay,
+                                width: 1.6,
+                              ),
+                            ),
+                          ),
                   ),
                 ],
               ),
@@ -700,13 +834,26 @@ class _ChatThreadTile extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    if (item.relationStatus == 'friends' && isPeerTyping) ...[
+                    if (showTyping) ...[
                       const SizedBox(height: 4),
                       Text(
                         'typing...',
                         style: GoogleFonts.ptSans(
                           color: const Color(0xFF22C55E),
                           fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          height: 1.25,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ] else if (item.isGroupInvitePending) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Group invite pending',
+                        style: GoogleFonts.ptSans(
+                          color: const Color(0xFFFDE68A),
+                          fontSize: 13.5,
                           fontWeight: FontWeight.w600,
                           height: 1.25,
                         ),

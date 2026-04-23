@@ -45,6 +45,7 @@ import 'chat_image_viewer_screen.dart';
 import 'chat_pdf_viewer_screen.dart';
 import 'chat_video_preview_screen.dart';
 import 'chat_video_viewer_screen.dart';
+import 'group_info_view.dart';
 
 enum OutboundDelivery { sending, sent, delivered, seen, failed }
 
@@ -53,6 +54,7 @@ class _UiMsg {
     required this.id,
     required this.clientId,
     required this.senderId,
+    this.senderName = '',
     required this.body,
     required this.createdAt,
     this.outbound,
@@ -64,6 +66,7 @@ class _UiMsg {
   final String id;
   final String clientId;
   final String senderId;
+  final String senderName;
   final String body;
   final DateTime createdAt;
   final OutboundDelivery? outbound;
@@ -74,6 +77,7 @@ class _UiMsg {
   _UiMsg copyWith({
     String? id,
     String? senderId,
+    String? senderName,
     String? body,
     DateTime? createdAt,
     OutboundDelivery? outbound,
@@ -85,6 +89,7 @@ class _UiMsg {
       id: id ?? this.id,
       clientId: clientId,
       senderId: senderId ?? this.senderId,
+      senderName: senderName ?? this.senderName,
       body: body ?? this.body,
       createdAt: createdAt ?? this.createdAt,
       outbound: outbound ?? this.outbound,
@@ -100,6 +105,7 @@ class _UiMsg {
       id: id,
       clientId: clientId,
       senderId: senderId,
+      senderName: senderName,
       body: body,
       createdAt: createdAt,
       outbound: outbound,
@@ -176,6 +182,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   bool _viewingOlderMessages = false;
   bool _loadingOlder = false;
   bool _hasMoreOlder = true;
+  bool _initialOpenPositionApplied = false;
+  String? _lastReadMessageId;
+  int? _firstUnreadIndex;
 
   /// Jump-to-latest arrow only after at least one older page was loaded (not just scrolling in first 50).
   bool _didLoadOlderPage = false;
@@ -233,6 +242,65 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
 
   /// Upgrades single-tick when peer comes online (socket or contacts presence).
   Worker? _contactsEver;
+  bool get _isGroupConversation => widget.contact.isGroupConversation;
+  String get _conversationId => widget.contact.conversationId;
+
+  Future<SendChatMessageResult> _sendMessageRemote({
+    required String body,
+    required String clientId,
+    String? replyToMessageId,
+  }) {
+    if (_isGroupConversation) {
+      return _repo.sendGroupMessage(
+        groupId: _conversationId,
+        body: body,
+        clientId: clientId,
+        replyToMessageId: replyToMessageId,
+      );
+    }
+    return _repo.sendChatMessage(
+      peerId: widget.contact.id,
+      body: body,
+      clientId: clientId,
+      replyToMessageId: replyToMessageId,
+    );
+  }
+
+  Future<ChatMessageDto> _setMessageReactionRemote({
+    required String messageId,
+    required String emoji,
+  }) {
+    if (_isGroupConversation) {
+      return _repo.setGroupMessageReaction(
+        groupId: _conversationId,
+        messageId: messageId,
+        emoji: emoji,
+      );
+    }
+    return _repo.setChatMessageReaction(
+      peerId: widget.contact.id,
+      messageId: messageId,
+      emoji: emoji,
+    );
+  }
+
+  Future<ChatMessageDto> _editMessageRemote({
+    required String messageId,
+    required String body,
+  }) {
+    if (_isGroupConversation) {
+      return _repo.editGroupMessage(
+        groupId: _conversationId,
+        messageId: messageId,
+        body: body,
+      );
+    }
+    return _repo.editChatMessage(
+      peerId: widget.contact.id,
+      messageId: messageId,
+      body: body,
+    );
+  }
 
   @override
   void initState() {
@@ -424,6 +492,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
 
   /// Disk cache (cold start) → socket → background sync. No blocking loader.
   Future<void> _startThread() async {
+    _lastReadMessageId = await ChatThreadLocalStore.loadLastReadMessageId(
+      _conversationId,
+    );
     if (_messages.isEmpty) {
       final disk = await ChatThreadLocalStore.load(widget.contact.id);
       if (!mounted) return;
@@ -435,6 +506,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           _serverIds
             ..clear()
             ..addAll(disk.serverIds);
+          _recomputeUnreadBoundary();
         });
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) _scheduleFloatingDateUpdate();
@@ -689,9 +761,12 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   void _bindSocket() {
     if (!Get.isRegistered<ChatController>()) return;
     final c = Get.find<ChatController>();
-    c.setConversationOpenPeer(widget.contact.id);
+    c.setConversationOpenPeer(
+      _conversationId,
+      isGroupConversation: _isGroupConversation,
+    );
     unawaited(
-      LocalNotificationService.clearChatNotificationsForPeer(widget.contact.id),
+      LocalNotificationService.clearChatNotificationsForPeer(_conversationId),
     );
     final s = c.chatSocket;
     if (s == null) return;
@@ -800,11 +875,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     }
 
     try {
-      final dto = await _repo.setChatMessageReaction(
-        peerId: widget.contact.id,
-        messageId: messageId,
-        emoji: em,
-      );
+      final dto = await _setMessageReactionRemote(messageId: messageId, emoji: em);
       if (!mounted) return;
       _applyReactionDto(dto, clearSelection: true);
     } catch (_) {
@@ -998,11 +1069,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         ? trimmed
         : '$_editingLeadPrefix$trimmed';
     try {
-      final dto = await _repo.editChatMessage(
-        peerId: widget.contact.id,
-        messageId: id,
-        body: body,
-      );
+      final dto = await _editMessageRemote(messageId: id, body: body);
       if (!mounted) return;
       setState(() {
         final i = _messages.indexWhere((m) => m.id == dto.id);
@@ -1445,10 +1512,15 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       }
       return;
     }
-    setState(() => _ingestRemoteDto(dto));
+    setState(() {
+      _ingestRemoteDto(dto);
+      _recomputeUnreadBoundary();
+    });
     _scheduleDocPreviewAutoDownload();
     _maybeMarkReadInbound(dto);
-    _scrollIfPinned();
+    // Group chats: avoid visible auto-scroll animation when a new remote message
+    // arrives right as the thread opens; keep position update instant instead.
+    _scrollIfPinned(animate: !_isGroupConversation);
   }
 
   void _mergeRemoteDtoIntoIndex(int i, ChatMessageDto dto) {
@@ -1471,6 +1543,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       id: dto.id,
       clientId: cid.isNotEmpty ? cid : prev.clientId,
       senderId: dto.senderId,
+      senderName: dto.senderName?.trim().isNotEmpty == true
+          ? dto.senderName!.trim()
+          : prev.senderName,
       body: mergedBody,
       createdAt: dto.createdAt.toLocal(),
       outbound: outbound,
@@ -1499,6 +1574,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           id: dto.id,
           clientId: prev.clientId,
           senderId: dto.senderId,
+          senderName: dto.senderName?.trim().isNotEmpty == true
+              ? dto.senderName!.trim()
+              : prev.senderName,
           body: _mergeVoicePlayedBodyPreservingLocal(
             incomingBody: dto.body,
             localBody: prev.body,
@@ -1535,6 +1613,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         id: dto.id,
         clientId: dto.clientId ?? '',
         senderId: dto.senderId,
+        senderName: dto.senderName?.trim() ?? '',
         body: dto.body,
         createdAt: dto.createdAt.toLocal(),
         outbound: outbound,
@@ -1649,10 +1728,21 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     final map = nested is Map ? Map<String, dynamic>.from(nested) : root;
     final fromId =
         '${map['fromUserId'] ?? map['senderId'] ?? map['from'] ?? ''}'.trim();
-    final peerId = '${map['peerId'] ?? map['toUserId'] ?? ''}'.trim();
-    final fromMatches = fromId.isNotEmpty && fromId == widget.contact.id;
-    final targetMatchesSelf = peerId.isNotEmpty && peerId == _myId;
-    if (!fromMatches && !targetMatchesSelf) return;
+    final peerId =
+        '${map['peerId'] ?? map['toUserId'] ?? map['conversationId'] ?? map['groupId'] ?? ''}'
+            .trim();
+    final fromMatches = !_isGroupConversation &&
+        fromId.isNotEmpty &&
+        fromId == widget.contact.id;
+    final targetMatchesSelf = !_isGroupConversation &&
+        peerId.isNotEmpty &&
+        peerId == _myId;
+    final groupMatches = _isGroupConversation &&
+        peerId.isNotEmpty &&
+        peerId == _conversationId &&
+        fromId.isNotEmpty &&
+        fromId != _myId;
+    if (!fromMatches && !targetMatchesSelf && !groupMatches) return;
     final voiceRecording =
         map['voiceRecording'] == true ||
         map['isRecordingVoice'] == true ||
@@ -1775,8 +1865,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     if (Get.isRegistered<ChatController>()) {
       final s = Get.find<ChatController>().chatSocket;
       final payload = {
-        'peerId': widget.contact.id,
-        'conversationId': widget.contact.id,
+        'peerId': _conversationId,
+        'conversationId': _conversationId,
+        if (_isGroupConversation) 'groupId': _conversationId,
         'messageId': msg.id,
         'chatMessageId': msg.id,
         'senderId': msg.senderId,
@@ -1791,6 +1882,11 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   }
 
   bool _involvesPeer(ChatMessageDto m) {
+    if (_isGroupConversation) {
+      final gid = _conversationId;
+      if (gid.isEmpty) return false;
+      return (m.groupId?.trim() == gid) || m.recipientId == gid;
+    }
     final peer = widget.contact.id;
     return (m.senderId == peer && m.recipientId == _myId) ||
         (m.senderId == _myId && m.recipientId == peer);
@@ -1805,15 +1901,105 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     return messageId.compareTo(upTo) <= 0;
   }
 
-  void _maybeMarkReadInbound(ChatMessageDto dto) {
-    if (dto.senderId != widget.contact.id) return;
+  bool _isInboundForReadAnchor(_UiMsg m) {
+    if (_isGroupConversation) return m.senderId != _myId;
+    return m.senderId == widget.contact.id;
+  }
+
+  void _recomputeUnreadBoundary() {
+    final anchor = _lastReadMessageId?.trim() ?? '';
+    if (anchor.isEmpty || _messages.isEmpty) {
+      _firstUnreadIndex = null;
+      return;
+    }
+    final anchorIdx = _messages.indexWhere((m) => m.id == anchor);
+    if (anchorIdx < 0) {
+      _firstUnreadIndex = null;
+      return;
+    }
+    for (var i = anchorIdx + 1; i < _messages.length; i++) {
+      if (_isInboundForReadAnchor(_messages[i])) {
+        _firstUnreadIndex = i;
+        return;
+      }
+    }
+    _firstUnreadIndex = null;
+  }
+
+  bool _showUnreadDividerBeforeMessage(int messageIndex) {
+    final unreadIdx = _firstUnreadIndex;
+    if (unreadIdx == null) return false;
+    return messageIndex == unreadIdx;
+  }
+
+  Future<void> _applyInitialUnreadOpenPosition() async {
+    if (!mounted) return;
+    if (!_scroll.hasClients) {
+      // Don't block thread rendering if the list is not attached yet.
+      _initialOpenPositionApplied = true;
+      return;
+    }
+    final unreadIdx = _firstUnreadIndex;
+    if (unreadIdx != null && unreadIdx > 0 && unreadIdx < _messages.length) {
+      final anchorId = _messages[unreadIdx - 1].id;
+      final ctx = _anchorKeyForMessageId(anchorId).currentContext;
+      if (ctx != null) {
+        await Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.08,
+          duration: Duration.zero,
+        );
+      } else {
+        _scrollToLatest(animate: false);
+      }
+    } else {
+      _scrollToLatest(animate: false);
+    }
+    if (!mounted) return;
+    setState(() {
+      _initialOpenPositionApplied = true;
+    });
+    _scheduleFloatingDateUpdate();
+  }
+
+  void _maybeMarkLatestVisibleAsRead() {
+    if (!_scroll.hasClients) return;
     if (_viewingOlderMessages) return;
-    unawaited(_markReadSafe(widget.contact.id, dto.id));
+    for (var i = _messages.length - 1; i >= 0; i--) {
+      final m = _messages[i];
+      if (!_isInboundForReadAnchor(m)) continue;
+      unawaited(_markReadSafe(_conversationId, m.id));
+      return;
+    }
+  }
+
+  void _maybeMarkReadInbound(ChatMessageDto dto) {
+    if (!_isGroupConversation && dto.senderId != widget.contact.id) return;
+    if (_isGroupConversation) {
+      final gid = _conversationId;
+      final target = dto.groupId?.trim().isNotEmpty == true
+          ? dto.groupId!.trim()
+          : dto.recipientId;
+      if (target != gid) return;
+    }
+    if (_viewingOlderMessages) return;
+    unawaited(_markReadSafe(_conversationId, dto.id));
   }
 
   Future<void> _markReadSafe(String peerId, String readUpToId) async {
     try {
-      await _repo.markChatMessagesRead(peerId: peerId, readUpToId: readUpToId);
+      if (_isGroupConversation) {
+        await _repo.markGroupMessagesRead(groupId: peerId, readUpToId: readUpToId);
+      } else {
+        await _repo.markChatMessagesRead(peerId: peerId, readUpToId: readUpToId);
+      }
+      _lastReadMessageId = readUpToId;
+      unawaited(
+        ChatThreadLocalStore.saveLastReadMessageId(_conversationId, readUpToId),
+      );
+      if (mounted) {
+        setState(_recomputeUnreadBoundary);
+      }
     } catch (_) {}
   }
 
@@ -1823,10 +2009,13 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       setState(() => _historyError = null);
     }
     try {
-      final list = await _repo.fetchChatMessages(peerId: widget.contact.id);
+      final list = _isGroupConversation
+          ? await _repo.fetchGroupMessages(groupId: _conversationId)
+          : await _repo.fetchChatMessages(peerId: widget.contact.id);
       if (!mounted) return;
       setState(() {
         _mergeHistorySnapshot(list);
+        _recomputeUnreadBoundary();
         _initialHistorySyncDone = true;
         if (_messages.isNotEmpty) {
           _historyError = null;
@@ -1835,20 +2024,15 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       });
       _scheduleDocPreviewAutoDownload();
       _flushPendingSocketMessages();
-      ChatMessageDto? lastPeer;
-      for (var i = list.length - 1; i >= 0; i--) {
-        if (list[i].senderId == widget.contact.id) {
-          lastPeer = list[i];
-          break;
-        }
-      }
-      if (lastPeer != null && !_viewingOlderMessages) {
-        unawaited(_markReadSafe(widget.contact.id, lastPeer.id));
-      }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         _maybeUpgradeDeliveryFromPeerPresence();
-        _scrollToLatest(animate: false);
+        if (!_initialOpenPositionApplied) {
+          unawaited(_applyInitialUnreadOpenPosition());
+        } else {
+          _scrollToLatest(animate: false);
+        }
+        _maybeMarkLatestVisibleAsRead();
         _scheduleFloatingDateUpdate();
       });
     } catch (e) {
@@ -1913,6 +2097,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       for (final dto in pending) {
         _ingestRemoteDto(dto);
       }
+      _recomputeUnreadBoundary();
     });
     _scheduleDocPreviewAutoDownload();
     for (final dto in pending) {
@@ -1933,6 +2118,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       id: m.id,
       clientId: m.clientId ?? '',
       senderId: m.senderId,
+      senderName: m.senderName?.trim() ?? '',
       body: m.body,
       createdAt: m.createdAt.toLocal(),
       outbound: outbound,
@@ -1958,6 +2144,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     final away = p > threshold;
     if (away != _viewingOlderMessages) {
       setState(() => _viewingOlderMessages = away);
+    }
+    if (!away) {
+      _maybeMarkLatestVisibleAsRead();
     }
     _maybeLoadOlder();
     _scheduleFloatingDateUpdate();
@@ -2097,11 +2286,17 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
 
     setState(() => _loadingOlder = true);
     try {
-      final page = await _repo.fetchChatMessages(
-        peerId: widget.contact.id,
-        before: before,
-        limit: 50,
-      );
+      final page = _isGroupConversation
+          ? await _repo.fetchGroupMessages(
+              groupId: _conversationId,
+              before: before,
+              limit: 50,
+            )
+          : await _repo.fetchChatMessages(
+              peerId: widget.contact.id,
+              before: before,
+              limit: 50,
+            );
       if (!mounted) return;
       if (page.isEmpty) {
         setState(() {
@@ -2240,7 +2435,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     if (!Get.isRegistered<ChatController>()) return;
     final s = Get.find<ChatController>().chatSocket;
     s?.emit('chat:typing', {
-      'peerId': widget.contact.id,
+      'peerId': _conversationId,
+      'conversationId': _conversationId,
+      if (_isGroupConversation) 'groupId': _conversationId,
       'typing': typing,
       'voiceRecording': false,
       'activity': typing ? 'text' : 'none',
@@ -2252,7 +2449,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     if (!Get.isRegistered<ChatController>()) return;
     final s = Get.find<ChatController>().chatSocket;
     final payload = {
-      'peerId': widget.contact.id,
+      'peerId': _conversationId,
+      'conversationId': _conversationId,
+      if (_isGroupConversation) 'groupId': _conversationId,
       'typing': false,
       'voiceRecording': recording,
       'isRecordingVoice': recording,
@@ -2386,8 +2585,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     });
 
     try {
-      final r = await _repo.sendChatMessage(
-        peerId: widget.contact.id,
+      final r = await _sendMessageRemote(
         body: text,
         clientId: clientId,
         replyToMessageId: replyToMessageId,
@@ -2449,8 +2647,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     });
 
     try {
-      final r = await _repo.sendChatMessage(
-        peerId: widget.contact.id,
+      final r = await _sendMessageRemote(
         body: msg.body,
         clientId: clientId,
         replyToMessageId: msg.replyTo?.messageId,
@@ -2491,16 +2688,114 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     if (!Get.isRegistered<ChatController>()) return widget.contact;
     final list = Get.find<ChatController>().contacts;
     for (final c in list) {
-      if (c.id == widget.contact.id) return c;
+      if (c.conversationId == _conversationId || c.id == widget.contact.id) {
+        return c;
+      }
     }
     return widget.contact;
   }
 
   String _headerSubtitle(ChatContact peer) {
+    if (peer.isGroupConversation) {
+      final names = _groupSubtitleNames(peer);
+      final online = _groupOnlineCount(peer, names);
+      if (names.isEmpty) return '$online online';
+      return '$online online · ${names.join(', ')}';
+    }
     if (peer.isOnline) return 'Online';
     final s = peer.lastSeenSubtitle;
     if (s != null) return s;
     return 'Offline';
+  }
+
+  String _resolveReplySenderLabel(ChatReplyQuote q, ChatContact peer) {
+    if (q.senderId == _myId) return 'You';
+
+    final byMessageId = _messages.where((m) => m.id == q.messageId);
+    if (byMessageId.isNotEmpty) {
+      final matched = byMessageId.first;
+      final n = matched.senderName.trim();
+      if (n.isNotEmpty) return n;
+      if (matched.senderId == _myId) return 'You';
+    }
+
+    if (Get.isRegistered<ChatController>()) {
+      for (final c in Get.find<ChatController>().contacts) {
+        if (!c.isGroupConversation && c.id == q.senderId) {
+          final n = c.name.trim();
+          if (n.isNotEmpty) return n;
+          final e = c.email.trim();
+          if (e.isNotEmpty) return e;
+        }
+      }
+    }
+
+    if (_isGroupConversation) return 'Member';
+    final fallback = peer.name.trim();
+    return fallback.isNotEmpty ? fallback : peer.email;
+  }
+
+  /// Group subtitle names: show others first and "You" at the end.
+  List<String> _groupSubtitleNames(ChatContact peer) {
+    final raw = peer.memberNames
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    if (raw.isEmpty) return const ['You'];
+
+    final auth = Get.find<AuthRepository>();
+    final meName = auth.session?.name.trim() ?? '';
+    final meEmail = auth.session?.email.trim() ?? '';
+    final meLower = meName.toLowerCase();
+    final meEmailLower = meEmail.toLowerCase();
+    final seen = <String>{};
+    final unique = <String>[];
+    for (final n in raw) {
+      final key = n.toLowerCase();
+      if (!seen.add(key)) continue;
+      unique.add(n);
+    }
+
+    // Replace only the logged-in user's own label with "You".
+    // Keep all other member names exactly as-is.
+    int meIndex = -1;
+    for (var i = 0; i < unique.length; i++) {
+      final key = unique[i].toLowerCase();
+      final isMe = key == 'you' ||
+          (meLower.isNotEmpty && key == meLower) ||
+          (meEmailLower.isNotEmpty && key == meEmailLower);
+      if (isMe) {
+        meIndex = i;
+        break;
+      }
+    }
+
+    final others = <String>[];
+    for (var i = 0; i < unique.length; i++) {
+      if (i == meIndex) continue;
+      others.add(unique[i]);
+    }
+    return [...others, 'You'];
+  }
+
+  int _groupOnlineCount(ChatContact peer, List<String> subtitleNames) {
+    if (!Get.isRegistered<ChatController>()) return 1;
+    final contacts = Get.find<ChatController>().contacts;
+    final others = subtitleNames
+        .where((n) => n.trim().isNotEmpty && n != 'You')
+        .map((n) => n.toLowerCase())
+        .toSet();
+    var onlineOthers = 0;
+    for (final c in contacts) {
+      if (c.isGroupConversation || !c.isOnline) continue;
+      final name = c.name.trim().toLowerCase();
+      final email = c.email.trim().toLowerCase();
+      if (others.contains(name) || others.contains(email)) {
+        onlineOthers += 1;
+      }
+    }
+    // This user is in the open group thread, so include self.
+    return onlineOthers + 1;
   }
 
   @override
@@ -2648,10 +2943,13 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                               key: _dateSeparatorKeyForMessageId(msg.id),
                               label: _chatDateHeaderLabel(msg.createdAt),
                             ),
+                          if (_showUnreadDividerBeforeMessage(messageIndex))
+                            const _UnreadMessagesDivider(),
                           _MessageBubble(
                             msg: msg,
                             myId: _myId,
                             peerDisplayName: peerLabel,
+                            isGroupConversation: _isGroupConversation,
                             timeLabel: _formatTime(msg.createdAt),
                             selectionHighlight: _selectedMessageIds.contains(
                               msg.id,
@@ -2742,6 +3040,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                                 ? null
                                 : () => _showReactionDetailsSheet(msg, peer),
                             onEmailTap: _onMessageEmailTap,
+                            replySenderLabelResolver: (q) =>
+                                _resolveReplySenderLabel(q, peer),
                           ),
                         ],
                       ),
@@ -2863,40 +3163,100 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             },
           ),
           titleSpacing: 0,
-          title: Row(
+          title: InkWell(
+            onTap: !_isGroupConversation
+                ? null
+                : () async {
+                    await Navigator.of(context).push<void>(
+                      MaterialPageRoute<void>(
+                        builder: (_) => GroupInfoScreen(contact: peer),
+                      ),
+                    );
+                  },
+            borderRadius: BorderRadius.circular(8),
+            child: Row(
             children: [
               Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  CircleAvatar(
-                    radius: 20,
-                    backgroundColor: kPrimaryBlue.withValues(alpha: 0.9),
-                    child: Text(
-                      initial,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 16,
-                      ),
+                  SizedBox(
+                    width: 40,
+                    height: 40,
+                    child: ClipOval(
+                      child: peer.groupImage.trim().isNotEmpty
+                          ? Image.network(
+                              peer.groupImage.trim(),
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) {
+                                return DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    color: kPrimaryBlue.withValues(alpha: 0.9),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      initial,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            )
+                          : DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: kPrimaryBlue.withValues(alpha: 0.9),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  initial,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                            ),
                     ),
                   ),
                   Positioned(
                     right: -1,
                     bottom: -1,
-                    child: Container(
-                      width: 11,
-                      height: 11,
-                      decoration: BoxDecoration(
-                        color: peer.isOnline
-                            ? const Color(0xFF22C55E)
-                            : const Color(0xFF6B7280),
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: _ChatThreadColors.composerBar,
-                          width: 1.6,
-                        ),
-                      ),
-                    ),
+                    child: peer.isGroupConversation
+                        ? Container(
+                            width: 13,
+                            height: 13,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1F2937),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: _ChatThreadColors.composerBar,
+                                width: 1.4,
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.groups_2_rounded,
+                              size: 8.5,
+                              color: Colors.white,
+                            ),
+                          )
+                        : Container(
+                            width: 11,
+                            height: 11,
+                            decoration: BoxDecoration(
+                              color: peer.isOnline
+                                  ? const Color(0xFF22C55E)
+                                  : const Color(0xFF6B7280),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: _ChatThreadColors.composerBar,
+                                width: 1.6,
+                              ),
+                            ),
+                          ),
                   ),
                 ],
               ),
@@ -2932,6 +3292,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
               ),
             ],
           ),
+          ),
           actions: [
             if (_hasMessageSelection) ...[
               IconButton(
@@ -2964,24 +3325,25 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 onPressed: _clearMessageSelection,
               ),
             ] else ...[
-              IconButton(
-                tooltip: 'Mail',
-                icon: const Icon(Icons.mail_outline_rounded),
-                onPressed: () {
-                  final to = peer.email.trim();
-                  if (to.isNotEmpty) {
-                    unawaited(_openComposeToAddress(to));
-                  } else {
-                    unawaited(
-                      Navigator.of(context).push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const ComposeScreen(),
+              if (!peer.isGroupConversation)
+                IconButton(
+                  tooltip: 'Mail',
+                  icon: const Icon(Icons.mail_outline_rounded),
+                  onPressed: () {
+                    final to = peer.email.trim();
+                    if (to.isNotEmpty) {
+                      unawaited(_openComposeToAddress(to));
+                    } else {
+                      unawaited(
+                        Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const ComposeScreen(),
+                          ),
                         ),
-                      ),
-                    );
-                  }
-                },
-              ),
+                      );
+                    }
+                  },
+                ),
               IconButton(
                 icon: const Icon(Icons.more_vert_rounded),
                 onPressed: () {},
@@ -3647,8 +4009,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     ).encode(forServer: true);
     final replyToMessageId = _messages[idx].replyTo?.messageId;
     try {
-      final r = await _repo.sendChatMessage(
-        peerId: widget.contact.id,
+      final r = await _sendMessageRemote(
         body: serverBody,
         clientId: clientId,
         replyToMessageId: replyToMessageId,
@@ -3762,8 +4123,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
 
     final replyToMessageId = _messages[idx].replyTo?.messageId;
     try {
-      final r = await _repo.sendChatMessage(
-        peerId: widget.contact.id,
+      final r = await _sendMessageRemote(
         body: serverBody,
         clientId: clientId,
         replyToMessageId: replyToMessageId,
@@ -3892,8 +4252,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     final replyToMessageId = _messages[idx].replyTo?.messageId;
 
     try {
-      final r = await _repo.sendChatMessage(
-        peerId: widget.contact.id,
+      final r = await _sendMessageRemote(
         body: serverBody,
         clientId: clientId,
         replyToMessageId: replyToMessageId,
@@ -4085,8 +4444,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     final replyToMessageId = _messages[idx].replyTo?.messageId;
 
     try {
-      final r = await _repo.sendChatMessage(
-        peerId: widget.contact.id,
+      final r = await _sendMessageRemote(
         body: serverBody,
         clientId: clientId,
         replyToMessageId: replyToMessageId,
@@ -5785,6 +6143,46 @@ class _ChatDateSeparator extends StatelessWidget {
   }
 }
 
+class _UnreadMessagesDivider extends StatelessWidget {
+  const _UnreadMessagesDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          const Expanded(
+            child: Divider(
+              color: Color(0x66FFFFFF),
+              thickness: 0.8,
+              height: 1,
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Text(
+              'Unread messages',
+              style: GoogleFonts.ptSans(
+                color: const Color(0xFFD1D5DB),
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const Expanded(
+            child: Divider(
+              color: Color(0x66FFFFFF),
+              thickness: 0.8,
+              height: 1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Sticky header at top of thread: shows calendar day for the topmost visible message while scrolling.
 class _FloatingStickyDateChip extends StatelessWidget {
   const _FloatingStickyDateChip({required this.label});
@@ -5850,6 +6248,7 @@ class _MessageBubble extends StatelessWidget {
     required this.msg,
     required this.myId,
     required this.peerDisplayName,
+    required this.isGroupConversation,
     required this.timeLabel,
     this.selectionHighlight = false,
     this.jumpHighlightActive = false,
@@ -5865,11 +6264,13 @@ class _MessageBubble extends StatelessWidget {
     this.onOpenVideo,
     this.onOpenDocument,
     this.onIncomingVoiceFirstPlay,
+    this.replySenderLabelResolver,
   });
 
   final _UiMsg msg;
   final String myId;
   final String peerDisplayName;
+  final bool isGroupConversation;
   final String timeLabel;
   final bool selectionHighlight;
   final bool jumpHighlightActive;
@@ -5887,6 +6288,7 @@ class _MessageBubble extends StatelessWidget {
   final VoidCallback? onOpenVideo;
   final VoidCallback? onOpenDocument;
   final VoidCallback? onIncomingVoiceFirstPlay;
+  final String Function(ChatReplyQuote quote)? replySenderLabelResolver;
 
   static const _jumpHighlightTint = Color(0xFF7DD3FC);
   static const _selectionHighlightTint = Color(0xFF64B5F6);
@@ -5908,9 +6310,45 @@ class _MessageBubble extends StatelessWidget {
 
   static const _replyAccent = Color(0xFF9C88FF);
 
+  static String _normalizeReplyPreviewText(String raw) {
+    final t = raw.trim();
+    if (t.isEmpty) return 'Message';
+    final voc = ChatVoiceMessage.tryParse(t);
+    if (voc != null) return 'Voice message';
+    final doc = ChatDocumentMessage.tryParse(t);
+    if (doc != null) return doc.isPdf ? 'PDF' : 'Document';
+    final vid = ChatVideoMessage.tryParse(t);
+    if (vid != null) {
+      final c = vid.caption.trim();
+      return c.isNotEmpty ? c : 'Video';
+    }
+    final img = ChatImageMessage.tryParse(t);
+    if (img != null) {
+      final c = img.caption.trim();
+      if (c.isNotEmpty) return c;
+      return img.items.length > 1 ? '${img.items.length} photos' : 'Photo';
+    }
+    // Fallback for non-JSON map-like payload previews that may come from older rows.
+    final low = t.toLowerCase();
+    if (low.startsWith('{') && low.contains('t:')) {
+      if (low.contains('t:voc') || low.contains('t:voice')) return 'Voice message';
+      if (low.contains('t:doc') || low.contains('t:file')) {
+        if (low.contains('e:pdf') || low.contains('ext:pdf')) return 'PDF';
+        return 'Document';
+      }
+      if (low.contains('t:img')) return 'Photo';
+      if (low.contains('t:vid')) return 'Video';
+      return 'Attachment';
+    }
+    return t;
+  }
+
   Widget _inlineReplyStrip(ChatReplyQuote q) {
-    final who = q.senderId == myId ? 'You' : peerDisplayName;
-    final prev = q.bodyPreview.isNotEmpty ? q.bodyPreview : 'Message';
+    final resolved = replySenderLabelResolver?.call(q).trim() ?? '';
+    final who = resolved.isNotEmpty
+        ? resolved
+        : (q.senderId == myId ? 'You' : peerDisplayName);
+    final prev = _normalizeReplyPreviewText(q.bodyPreview);
     final row = Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -5977,6 +6415,23 @@ class _MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final outgoing = msg.senderId == myId;
+    final senderLabel = msg.senderName.trim().isNotEmpty
+        ? msg.senderName.trim()
+        : (outgoing ? 'You' : 'Member');
+    final groupSenderInlineLabel = Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text(
+        senderLabel,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: GoogleFonts.ptSans(
+          color: const Color(0xFF7DD3FC),
+          fontSize: 12.5,
+          fontWeight: FontWeight.w700,
+          height: 1.1,
+        ),
+      ),
+    );
     final bodyForRich = _ForwardedPayloadParse.stripForDisplay(msg.body);
     final showForwardedBanner = bodyForRich != null;
     final bodyText = bodyForRich ?? msg.body;
@@ -6640,6 +7095,7 @@ class _MessageBubble extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    if (isGroupConversation) groupSenderInlineLabel,
                     if (q != null && !q.isEmpty) _inlineReplyStrip(q),
                     if (showForwardedBanner) const _ForwardedBannerRow(),
                     if (showEditedBanner) const _EditedBannerRow(),
@@ -6695,6 +7151,7 @@ class _MessageBubble extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    if (isGroupConversation) groupSenderInlineLabel,
                     if (q != null && !q.isEmpty) _inlineReplyStrip(q),
                     if (showForwardedBanner) const _ForwardedBannerRow(),
                     if (showEditedBanner) const _EditedBannerRow(),
@@ -6718,6 +7175,7 @@ class _MessageBubble extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (isGroupConversation) groupSenderInlineLabel,
           if (q != null && !q.isEmpty) _inlineReplyStrip(q),
           if (showForwardedBanner) const _ForwardedBannerRow(),
           if (showEditedBanner) const _EditedBannerRow(),
@@ -6778,6 +7236,7 @@ class _MessageBubble extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (isGroupConversation) groupSenderInlineLabel,
           if (q != null && !q.isEmpty) _inlineReplyStrip(q),
           if (showForwardedBanner) const _ForwardedBannerRow(),
           if (showEditedBanner) const _EditedBannerRow(),
@@ -6944,6 +7403,7 @@ class _MessageBubble extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                    if (isGroupConversation) groupSenderInlineLabel,
                       if (q != null && !q.isEmpty) _inlineReplyStrip(q),
                       if (showForwardedBanner) const _ForwardedBannerRow(),
                       if (showEditedBanner) const _EditedBannerRow(),
@@ -6975,31 +7435,66 @@ class _MessageBubble extends StatelessWidget {
         ),
       );
     }
-    final incomingBubble = Padding(
-      padding: EdgeInsets.only(right: 56, bottom: rowBottomPadding, top: 2),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            incomingCore,
-            if (groupedIn.isNotEmpty && onReactionSummaryTap != null)
-              Positioned(
-                left: _kBubbleTailWidth,
-                bottom: -_ReactionSummaryBadge.diameter / 2,
-                child: GestureDetector(
-                  onTap: onReactionSummaryTap,
-                  behavior: HitTestBehavior.opaque,
-                  child: _ReactionSummaryBadge(
-                    grouped: groupedIn,
-                    bubbleColor: _ChatThreadColors.incomingBubble,
-                  ),
+    final incomingBubbleCore = Align(
+      alignment: Alignment.centerLeft,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          incomingCore,
+          if (groupedIn.isNotEmpty && onReactionSummaryTap != null)
+            Positioned(
+              left: _kBubbleTailWidth,
+              bottom: -_ReactionSummaryBadge.diameter / 2,
+              child: GestureDetector(
+                onTap: onReactionSummaryTap,
+                behavior: HitTestBehavior.opaque,
+                child: _ReactionSummaryBadge(
+                  grouped: groupedIn,
+                  bubbleColor: _ChatThreadColors.incomingBubble,
                 ),
               ),
-          ],
-        ),
+            ),
+        ],
       ),
     );
+    final incomingBubble = isGroupConversation
+        ? Padding(
+            padding: EdgeInsets.only(right: 16, bottom: rowBottomPadding, top: 2),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: CircleAvatar(
+                    radius: 13,
+                    backgroundColor: const Color(0xFF334155),
+                    child: Text(
+                      senderLabel.isEmpty ? '?' : senderLabel.substring(0, 1).toUpperCase(),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 56),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minWidth: 170),
+                      child: incomingBubbleCore,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          )
+        : Padding(
+            padding: EdgeInsets.only(right: 56, bottom: rowBottomPadding, top: 2),
+            child: incomingBubbleCore,
+          );
     if (onSwipeReply == null) return incomingBubble;
     return _SwipeToReplyWrap(onReply: onSwipeReply!, child: incomingBubble);
   }

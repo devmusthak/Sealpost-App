@@ -224,19 +224,25 @@ class LocalNotificationService {
 
     if (d['type'] == 'new_chat_message') {
       final messageId = (d['messageId'] ?? '').trim();
-      final peerId = (d['fromUserId'] ?? d['peerId'] ?? '').trim();
-      if (messageId.isEmpty || peerId.isEmpty) return;
+      final groupId = (d['groupId'] ?? '').trim();
+      final isGroupConversation =
+          (d['isGroupConversation'] ?? '').trim().toLowerCase() == 'true' ||
+          groupId.isNotEmpty;
+      final conversationId =
+          (isGroupConversation ? groupId : (d['fromUserId'] ?? d['peerId'] ?? ''))
+              .trim();
+      if (messageId.isEmpty || conversationId.isEmpty) return;
       final title = _chatSenderTitle(d);
       final body = _chatPreviewText(d, fallback: message.notification?.body);
       final payloadMap = d.map((k, v) => MapEntry(k, '$v'));
       await _plugin.show(
-        id: _idForChatPeer(peerId),
+        id: _idForChatPeer(conversationId),
         title: title,
         body: body,
         notificationDetails: _chatChannelDetails(
           senderName: title,
           preview: body,
-          isGroupConversation: false,
+          isGroupConversation: isGroupConversation,
         ),
         payload: jsonEncode(payloadMap),
       );
@@ -358,6 +364,17 @@ class LocalNotificationService {
   }
 
   static String _chatSenderTitle(Map<String, dynamic> data) {
+    final isGroupConversation =
+        (data['isGroupConversation'] ?? '').toString().trim().toLowerCase() ==
+            'true' ||
+        (data['groupId'] ?? '').toString().trim().isNotEmpty;
+    if (isGroupConversation) {
+      final groupName = (data['groupName'] ?? data['conversationName'] ?? '')
+          .toString()
+          .trim();
+      if (groupName.isNotEmpty) return groupName;
+      return 'Group message';
+    }
     final fromName = (data['fromName'] ?? '').trim();
     if (fromName.isNotEmpty) return fromName;
     final fromEmail = (data['fromEmail'] ?? '').trim();
@@ -390,6 +407,16 @@ class LocalNotificationService {
         return '📎 Attachment';
     }
     final body = (data['bodyPreview'] ?? data['body'] ?? fallback ?? '').trim();
+    final isGroupConversation =
+        (data['isGroupConversation'] ?? '').toString().trim().toLowerCase() ==
+            'true' ||
+        (data['groupId'] ?? '').toString().trim().isNotEmpty;
+    if (isGroupConversation && body.isNotEmpty) {
+      final sender = (data['fromName'] ?? data['fromEmail'] ?? '')
+          .toString()
+          .trim();
+      if (sender.isNotEmpty) return '$sender: $body';
+    }
     if (body.isNotEmpty) return body;
     return 'You have a new chat message';
   }
@@ -441,11 +468,21 @@ class LocalNotificationService {
       if (raw is! Map) return;
       final data = raw.map((k, v) => MapEntry(k.toString(), '${v ?? ''}'));
       if ((data['type'] ?? '') != 'new_chat_message') return;
-      final peerId = (data['fromUserId'] ?? data['peerId'] ?? '').trim();
+      final groupId = (data['groupId'] ?? '').trim();
+      final isGroupConversation =
+          (data['isGroupConversation'] ?? '').trim().toLowerCase() == 'true' ||
+          groupId.isNotEmpty;
+      final peerId =
+          (isGroupConversation ? groupId : (data['fromUserId'] ?? data['peerId'] ?? ''))
+              .trim();
       if (peerId.isEmpty) return;
       final text = replyText.trim();
       if (text.isEmpty) return;
-      final sent = await _sendQuickReply(peerId: peerId, body: text);
+      final sent = await _sendQuickReply(
+        peerId: peerId,
+        body: text,
+        isGroupConversation: isGroupConversation,
+      );
       if (!sent) return;
       await clearChatNotificationsForPeer(peerId);
       if (_onChatTap != null) {
@@ -462,14 +499,23 @@ class LocalNotificationService {
   static Future<bool> _sendQuickReply({
     required String peerId,
     required String body,
+    required bool isGroupConversation,
   }) async {
     try {
       if (Get.isRegistered<ChatRepository>()) {
-        await Get.find<ChatRepository>().sendChatMessage(
-          peerId: peerId,
-          body: body,
-          clientId: _quickReplyClientId(),
-        );
+        if (isGroupConversation) {
+          await Get.find<ChatRepository>().sendGroupMessage(
+            groupId: peerId,
+            body: body,
+            clientId: _quickReplyClientId(),
+          );
+        } else {
+          await Get.find<ChatRepository>().sendChatMessage(
+            peerId: peerId,
+            body: body,
+            clientId: _quickReplyClientId(),
+          );
+        }
         return true;
       }
     } catch (_) {

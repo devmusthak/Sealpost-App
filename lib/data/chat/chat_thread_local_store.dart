@@ -20,6 +20,9 @@ abstract final class ChatThreadLocalStore {
   static String _fileName(String peerId) =>
       '${peerId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_')}.json';
 
+  static String _metaFileName(String peerId) =>
+      '${peerId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_')}.meta.json';
+
   /// Returns decoded rows + server ids, or null if missing / invalid.
   static Future<({List<Map<String, dynamic>> rows, List<String> serverIds})?> load(
     String peerId,
@@ -73,6 +76,45 @@ abstract final class ChatThreadLocalStore {
         jsonEncode({
           'serverIds': serverIds,
           'messages': rows,
+          'savedAt': DateTime.now().toUtc().toIso8601String(),
+        }),
+      );
+    } catch (_) {
+      /* non-fatal */
+    }
+  }
+
+  /// Last read server message id (anchor) for a conversation.
+  static Future<String?> loadLastReadMessageId(String peerId) async {
+    if (peerId.isEmpty) return null;
+    try {
+      final dir = await _dir();
+      final f = File('${dir.path}/${_metaFileName(peerId)}');
+      if (!await f.exists()) return null;
+      final raw = await f.readAsString();
+      if (raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return null;
+      final id = '${decoded['lastReadMessageId'] ?? ''}'.trim();
+      return id.isEmpty ? null : id;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> saveLastReadMessageId(
+    String peerId,
+    String lastReadMessageId,
+  ) async {
+    if (peerId.isEmpty) return;
+    final id = lastReadMessageId.trim();
+    if (id.isEmpty) return;
+    try {
+      final dir = await _dir();
+      final f = File('${dir.path}/${_metaFileName(peerId)}');
+      await f.writeAsString(
+        jsonEncode({
+          'lastReadMessageId': id,
           'savedAt': DateTime.now().toUtc().toIso8601String(),
         }),
       );

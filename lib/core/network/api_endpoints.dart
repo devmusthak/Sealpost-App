@@ -32,6 +32,12 @@ abstract final class ApiEndpoints {
   static const String chatMessageReaction = '$chatMessages/reaction';
   /// PATCH same path as [chatMessages] — edit existing message (sender, time window).
   static const String chatMessageEdit = chatMessages;
+  static const String chatGroups = '$chatPrefix/groups';
+  static const String chatGroupInvites = '$chatGroups/invites';
+  static const String chatGroupMessages = '$chatGroups/messages';
+  static const String chatGroupMessagesRead = '$chatGroupMessages/read';
+  static const String chatGroupMessageReaction = '$chatGroupMessages/reaction';
+  static const String chatGroupMessageEdit = chatGroupMessages;
 
   static String get socketOrigin {
     final u = Uri.parse(baseUrl);

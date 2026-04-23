@@ -10,6 +10,13 @@ class ChatContact {
     required this.timeLabel,
     this.lastMessageAt,
     required this.unreadCount,
+    this.conversationType = 'direct',
+    this.groupId,
+    this.groupImage = '',
+    this.groupDescription = '',
+    this.createdBy = '',
+    this.memberNames = const [],
+    this.memberStatus = 'accepted',
   });
 
   final String id;
@@ -25,6 +32,20 @@ class ChatContact {
   /// UTC from API; when set, [chatHomeTimeLabel] uses device local timezone.
   final DateTime? lastMessageAt;
   final int unreadCount;
+  final String conversationType;
+  final String? groupId;
+  final String groupImage;
+  final String groupDescription;
+  final String createdBy;
+  final List<String> memberNames;
+  final String memberStatus;
+
+  bool get isGroupConversation =>
+      conversationType == 'group' || (groupId != null && groupId!.isNotEmpty);
+  bool get isGroupInvitePending =>
+      isGroupConversation && memberStatus.toLowerCase() == 'pending';
+  String get conversationId =>
+      isGroupConversation ? (groupId?.trim().isNotEmpty == true ? groupId!.trim() : id) : id;
 
   /// Chat list row time — prefers [lastMessageAt] formatted locally over server [timeLabel].
   String get chatHomeTimeLabel {
@@ -52,8 +73,44 @@ class ChatContact {
       timeLabel: '${json['timeLabel'] ?? ''}',
       lastMessageAt: _parseDateTime(json['lastMessageAt']),
       unreadCount: int.tryParse('${json['unreadCount'] ?? 0}') ?? 0,
+      conversationType: '${json['conversationType'] ?? (json['groupId'] != null ? 'group' : 'direct')}'
+          .trim()
+          .toLowerCase(),
+      groupId: _asNullableString(json['groupId'] ?? json['conversationId']),
+      groupImage: '${json['groupImage'] ?? json['image'] ?? ''}'.trim(),
+      groupDescription: '${json['groupDescription'] ?? json['description'] ?? ''}'.trim(),
+      createdBy: '${json['createdBy'] ?? ''}'.trim(),
+      memberNames: _parseMemberNames(json['memberNames'] ?? json['members']),
+      memberStatus: '${json['memberStatus'] ?? json['inviteStatus'] ?? 'accepted'}'
+          .trim()
+          .toLowerCase(),
     );
   }
+}
+
+String? _asNullableString(dynamic v) {
+  if (v == null) return null;
+  final s = '$v'.trim();
+  if (s.isEmpty) return null;
+  return s;
+}
+
+List<String> _parseMemberNames(dynamic v) {
+  if (v is! List) return const [];
+  final out = <String>[];
+  for (final e in v) {
+    if (e is String) {
+      final s = e.trim();
+      if (s.isNotEmpty) out.add(s);
+      continue;
+    }
+    if (e is Map) {
+      final m = Map<String, dynamic>.from(e);
+      final n = '${m['name'] ?? ''}'.trim();
+      if (n.isNotEmpty) out.add(n);
+    }
+  }
+  return out;
 }
 
 DateTime? _parseDateTime(dynamic v) {

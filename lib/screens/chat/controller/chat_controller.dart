@@ -30,6 +30,7 @@ class ChatController extends GetxController {
   late final ChatRepository _repo = Get.find<ChatRepository>();
   io.Socket? _socket;
   String? _openConversationPeerId;
+  bool _openConversationIsGroup = false;
   final Map<String, Timer> _typingTimers = {};
 
   /// Active socket for chat thread listeners (same connection as contacts).
@@ -49,6 +50,7 @@ class ChatController extends GetxController {
   @override
   void onClose() {
     _openConversationPeerId = null;
+    _openConversationIsGroup = false;
     for (final t in _typingTimers.values) {
       t.cancel();
     }
@@ -60,13 +62,26 @@ class ChatController extends GetxController {
   }
 
   /// Lets the server join a conversation room (re-sent on reconnect).
-  void setConversationOpenPeer(String? peerId) {
+  /// For group chats, [conversationId] is the `groupId`.
+  void setConversationOpenPeer(
+    String? conversationId, {
+    bool isGroupConversation = false,
+  }) {
     _openConversationPeerId =
-        peerId != null && peerId.trim().isNotEmpty ? peerId.trim() : null;
+        conversationId != null && conversationId.trim().isNotEmpty
+        ? conversationId.trim()
+        : null;
+    _openConversationIsGroup =
+        _openConversationPeerId != null && isGroupConversation;
     if (_openConversationPeerId == null) {
       _socket?.emit('chat:conversation:close');
     } else {
-      _socket?.emit('chat:conversation:open', {'peerId': _openConversationPeerId});
+      _socket?.emit(
+        'chat:conversation:open',
+        isGroupConversation
+            ? {'groupId': _openConversationPeerId}
+            : {'peerId': _openConversationPeerId},
+      );
     }
   }
 
@@ -103,7 +118,10 @@ class ChatController extends GetxController {
     _socket!.onConnect((_) {
       final peer = _openConversationPeerId;
       if (peer != null && peer.isNotEmpty) {
-        _socket!.emit('chat:conversation:open', {'peerId': peer});
+        _socket!.emit(
+          'chat:conversation:open',
+          _openConversationIsGroup ? {'groupId': peer} : {'peerId': peer},
+        );
       }
     });
   }

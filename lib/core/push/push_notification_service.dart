@@ -75,13 +75,20 @@ class PendingChatNotification extends GetxController {
 
   void applyFromData(Map<String, String> d) {
     if (d['type'] != 'new_chat_message') return;
-    final id = (d['fromUserId'] ?? d['peerId'] ?? '').trim();
+    final groupId = (d['groupId'] ?? '').trim();
+    final isGroup =
+        (d['isGroupConversation'] ?? '').trim().toLowerCase() == 'true' ||
+        groupId.isNotEmpty;
+    final id = (isGroup ? groupId : (d['fromUserId'] ?? d['peerId'] ?? '')).trim();
     if (id.isEmpty) return;
     final name = (d['fromName'] ?? '').trim();
+    final groupName = (d['groupName'] ?? d['conversationName'] ?? '').trim();
     final email = (d['fromEmail'] ?? '').trim();
     contact = ChatContact(
       id: id,
-      name: name.isNotEmpty ? name : (email.isNotEmpty ? email : 'Chat'),
+      name: isGroup
+          ? (groupName.isNotEmpty ? groupName : 'Group')
+          : (name.isNotEmpty ? name : (email.isNotEmpty ? email : 'Chat')),
       email: email.isNotEmpty ? email : '',
       isOnline: false,
       lastSeenAt: null,
@@ -89,6 +96,9 @@ class PendingChatNotification extends GetxController {
       lastMessage: '',
       timeLabel: '',
       unreadCount: 0,
+      conversationType: isGroup ? 'group' : 'direct',
+      groupId: isGroup ? id : null,
+      groupImage: (d['groupImage'] ?? '').trim(),
     );
   }
 
@@ -145,12 +155,22 @@ class PushNotificationService {
       if (defaultTargetPlatform == TargetPlatform.android) {
         final d = message.data;
         if (d['type'] == 'new_chat_message') {
-          final from = '${d['fromUserId'] ?? ''}'.trim();
-          if (from.isNotEmpty &&
+          final groupId = '${d['groupId'] ?? ''}'.trim();
+          final isGroup =
+              '${d['isGroupConversation'] ?? ''}'.trim().toLowerCase() ==
+                  'true' ||
+              groupId.isNotEmpty;
+          final conversationId = isGroup
+              ? groupId
+              : '${d['fromUserId'] ?? d['peerId'] ?? ''}'.trim();
+          if (conversationId.isNotEmpty &&
               Get.isRegistered<ChatController>() &&
-              Get.find<ChatController>().openConversationPeerId == from) {
+              Get.find<ChatController>().openConversationPeerId ==
+                  conversationId) {
             unawaited(
-              LocalNotificationService.clearChatNotificationsForPeer(from),
+              LocalNotificationService.clearChatNotificationsForPeer(
+                conversationId,
+              ),
             );
             return;
           }
