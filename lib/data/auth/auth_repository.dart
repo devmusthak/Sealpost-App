@@ -1,10 +1,10 @@
 import 'package:dio/dio.dart';
+import 'package:sealpost/data/auth/auth_response.dart';
+import 'package:sealpost/data/session/auth_session.dart';
+import 'package:sealpost/data/session/session_storage.dart';
 
 import '../../core/network/api_endpoints.dart';
-import '../session/auth_session.dart';
-import '../session/session_storage.dart';
 import 'auth_exception.dart';
-import 'auth_response.dart';
 
 class AuthRepository {
   AuthRepository(this._dio, this._sessionStorage);
@@ -147,6 +147,32 @@ class AuthRepository {
     }
     _session = null;
     await _sessionStorage.clear();
+  }
+
+  Future<bool> logoutActiveAccount() async {
+    final bearer = accessToken;
+    if (bearer != null && bearer.isNotEmpty) {
+      try {
+        await _dio.post(
+          ApiEndpoints.presence,
+          data: {'online': false},
+          options: Options(
+            headers: {'Authorization': 'Bearer $bearer'},
+          ),
+        );
+      } catch (_) {
+        /* continue local cleanup */
+      }
+    }
+    final activeId = _sessionStorage.activeAccountId ?? _session?.userId;
+    if (activeId == null || activeId.trim().isEmpty) {
+      _session = null;
+      await _sessionStorage.clear();
+      return false;
+    }
+    final nextActive = await _sessionStorage.removeAccount(activeId);
+    _session = nextActive == null ? null : await _sessionStorage.load();
+    return nextActive != null;
   }
 
   /// Saves FCM token for push (new mail). No-op if not signed in.

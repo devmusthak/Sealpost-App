@@ -20,6 +20,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import 'package:record/record.dart';
 
+import '../../../core/call/agora_call_service.dart';
 import '../../../core/push/local_notification_service.dart';
 import '../../../data/auth/auth_repository.dart';
 import '../../../data/chat/chat_image_message.dart';
@@ -44,6 +45,7 @@ import '../widgets/group_invite_preview_widget.dart';
 import 'chat_image_preview_screen.dart';
 import 'chat_image_viewer_screen.dart';
 import 'chat_pdf_viewer_screen.dart';
+import 'agora_audio_call_screen.dart';
 import 'chat_video_preview_screen.dart';
 import 'chat_video_viewer_screen.dart';
 import 'group_info_view.dart';
@@ -668,6 +670,78 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     final messenger = ScaffoldMessenger.of(target);
     messenger.clearSnackBars();
     messenger.showSnackBar(snackBar);
+  }
+
+  Future<void> _onCallActionTap({
+    required ChatContact peer,
+    required bool video,
+  }) async {
+    if (!mounted) return;
+    if (video) {
+      _showThreadSnackBar(
+        SnackBar(
+          content: Text(
+            'Video call is not integrated yet.',
+            style: GoogleFonts.ptSans(),
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final callType = video ? 'Video call' : 'Voice call';
+    try {
+      final auth = Get.find<AuthRepository>();
+      final session = await Get.find<AgoraCallService>().createAndInviteAudioSession(
+        peerId: peer.id,
+        peerName: peer.name.isEmpty ? peer.email : peer.name,
+        conversationId: peer.conversationId,
+        callerName:
+            auth.session?.name ??
+            auth.session?.email ??
+            auth.userId ??
+            'Sealpost User',
+      );
+      if (!mounted) return;
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => AgoraAudioCallScreen(
+            appId: Get.find<AgoraCallService>().appId,
+            peerName: peer.name.isEmpty ? peer.email : peer.name,
+            session: session,
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      _showThreadSnackBar(
+        SnackBar(
+          content: Text(
+            error is StateError ? error.message : '$callType failed to start',
+            style: GoogleFonts.ptSans(),
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<void> _startAudioCallFromToolbar(ChatContact peer) async {
+    await _onCallActionTap(peer: peer, video: false);
+  }
+
+  Future<void> _showVideoNotReady() async {
+    if (!mounted) return;
+    _showThreadSnackBar(
+      SnackBar(
+        content: Text(
+          'Video call will be added next.',
+          style: GoogleFonts.ptSans(),
+        ),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   void _startJumpToQuoteHighlight(String messageId) {
@@ -3337,6 +3411,20 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 onPressed: _clearMessageSelection,
               ),
             ] else ...[
+              if (!peer.isGroupConversation) ...[
+                IconButton(
+                  tooltip: 'Call',
+                  icon: const Icon(Icons.call_rounded),
+                  onPressed: () => unawaited(
+                    _startAudioCallFromToolbar(peer),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Video call',
+                  icon: const Icon(Icons.videocam_rounded),
+                  onPressed: () => unawaited(_showVideoNotReady()),
+                ),
+              ],
               if (!peer.isGroupConversation)
                 IconButton(
                   tooltip: 'Mail',
@@ -7568,21 +7656,18 @@ class _ThreadComposer extends StatefulWidget {
   State<_ThreadComposer> createState() => _ThreadComposerState();
 }
 
+enum _ComposerVoiceState { idle, recording, uploading, sent, failed }
+
 class _ThreadComposerState extends State<_ThreadComposer> {
   static const _maxVoiceRecord = Duration(minutes: 2);
-  static const _voiceCancelDx = -110.0;
-  static const _voiceLockDy = -72.0;
+  static const _minVoiceRecordToSend = Duration(milliseconds: 350);
 
   bool _emojiPanelOpen = false;
   final AudioRecorder _recorder = AudioRecorder();
   Timer? _voiceTimer;
   DateTime? _voiceStartAt;
   Duration _voiceElapsed = Duration.zero;
-  bool _voiceRecording = false;
-  bool _voiceLocked = false;
-  bool _voiceCancellingHint = false;
-  double _voiceDragDx = 0;
-  double _voiceDragDy = 0;
+  _ComposerVoiceState _voiceState = _ComposerVoiceState.idle;
   bool _voiceBusy = false;
 
   void _onControllerText() => setState(() {});
@@ -7616,6 +7701,9 @@ class _ThreadComposerState extends State<_ThreadComposer> {
   @override
   void dispose() {
     _voiceTimer?.cancel();
+    if (_isRecording) {
+      widget.onVoiceRecordingChanged(false);
+    }
     unawaited(_recorder.dispose());
     widget.controller.removeListener(_onControllerText);
     widget.focusNode.removeListener(_onFocusChanged);
@@ -7648,8 +7736,10 @@ class _ThreadComposerState extends State<_ThreadComposer> {
     return '$m:$s';
   }
 
+  bool get _isRecording => _voiceState == _ComposerVoiceState.recording;
+
   Future<void> _startVoiceRecord() async {
-    if (_voiceBusy || _voiceRecording || _hasTypedText) return;
+    if (_voiceBusy || _isRecording || _hasTypedText) return;
     try {
       final has = await _recorder.hasPermission();
       if (!has) return;
@@ -7668,65 +7758,30 @@ class _ThreadComposerState extends State<_ThreadComposer> {
       _voiceStartAt = DateTime.now();
       setState(() {
         _voiceElapsed = Duration.zero;
-        _voiceRecording = true;
-        _voiceLocked = false;
-        _voiceCancellingHint = false;
-        _voiceDragDx = 0;
-        _voiceDragDy = 0;
+        _voiceState = _ComposerVoiceState.recording;
       });
       widget.onVoiceRecordingChanged(true);
       _voiceTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
         final start = _voiceStartAt;
-        if (!mounted || !_voiceRecording || start == null) return;
+        if (!mounted || !_isRecording || start == null) return;
         final elapsed = DateTime.now().difference(start);
         if (elapsed >= _maxVoiceRecord) {
-          unawaited(_finishVoiceRecord(send: true));
+          unawaited(_stopVoiceRecord(send: true));
           return;
         }
         setState(() => _voiceElapsed = elapsed);
       });
-    } catch (_) {}
-  }
-
-  void _onVoiceDrag(LongPressMoveUpdateDetails d) {
-    if (!_voiceRecording || _voiceLocked) return;
-    final offset = d.offsetFromOrigin;
-    final dx = offset.dx.clamp(_voiceCancelDx, 0.0);
-    final dy = offset.dy.clamp(_voiceLockDy, 0.0);
-    final seekingLock = dy <= -20;
-    // While dragging upward toward lock, suppress cancel hint to match WhatsApp-like UX.
-    final canceling = !seekingLock && offset.dx <= _voiceCancelDx;
-    if (canceling != _voiceCancellingHint ||
-        dx != _voiceDragDx ||
-        dy != _voiceDragDy) {
+    } catch (_) {
+      if (!mounted) return;
       setState(() {
-        _voiceCancellingHint = canceling;
-        _voiceDragDx = dx;
-        _voiceDragDy = dy;
+        _voiceState = _ComposerVoiceState.failed;
       });
-    }
-    if (offset.dy <= _voiceLockDy) {
-      setState(() {
-        _voiceLocked = true;
-        _voiceCancellingHint = false;
-        _voiceDragDx = 0;
-        _voiceDragDy = 0;
-      });
+      widget.onVoiceRecordingChanged(false);
     }
   }
 
-  Future<void> _onVoiceLongPressEnd(LongPressEndDetails _) async {
-    if (!_voiceRecording) return;
-    if (_voiceLocked) return;
-    if (_voiceCancellingHint) {
-      await _finishVoiceRecord(send: false);
-      return;
-    }
-    await _finishVoiceRecord(send: true);
-  }
-
-  Future<void> _finishVoiceRecord({required bool send}) async {
-    if (_voiceBusy) return;
+  Future<void> _stopVoiceRecord({required bool send}) async {
+    if (_voiceBusy || !_isRecording) return;
     _voiceBusy = true;
     _voiceTimer?.cancel();
     String? path;
@@ -7736,42 +7791,49 @@ class _ThreadComposerState extends State<_ThreadComposer> {
       }
     } catch (_) {}
     final elapsed = _voiceElapsed;
-    setState(() {
-      _voiceRecording = false;
-      _voiceLocked = false;
-      _voiceCancellingHint = false;
-      _voiceElapsed = Duration.zero;
-      _voiceStartAt = null;
-      _voiceDragDx = 0;
-      _voiceDragDy = 0;
-    });
+    final trimmedPath = (path ?? '').trim();
+    final shouldSend = send &&
+        trimmedPath.isNotEmpty &&
+        elapsed >= _minVoiceRecordToSend;
+    if (mounted) {
+      setState(() {
+        _voiceElapsed = Duration.zero;
+        _voiceStartAt = null;
+        _voiceState = shouldSend
+            ? _ComposerVoiceState.uploading
+            : _ComposerVoiceState.idle;
+      });
+    }
     widget.onVoiceRecordingChanged(false);
-    _voiceBusy = false;
-    if (!send) {
-      if (path != null && path.isNotEmpty) {
+    if (!shouldSend) {
+      if (trimmedPath.isNotEmpty) {
         try {
-          await File(path).delete();
+          await File(trimmedPath).delete();
         } catch (_) {}
       }
+      _voiceBusy = false;
       return;
     }
-    final p = (path ?? '').trim();
-    if (p.isEmpty) return;
-    if (elapsed < const Duration(milliseconds: 350)) {
-      try {
-        await File(p).delete();
-      } catch (_) {}
-      return;
+    try {
+      await widget.onSendVoice(trimmedPath, elapsed);
+      if (mounted) {
+        setState(() => _voiceState = _ComposerVoiceState.sent);
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _voiceState = _ComposerVoiceState.failed);
+      }
+    } finally {
+      _voiceBusy = false;
+      if (mounted &&
+          (_voiceState == _ComposerVoiceState.sent ||
+              _voiceState == _ComposerVoiceState.failed)) {
+        Future<void>.delayed(const Duration(milliseconds: 900), () {
+          if (!mounted || _isRecording) return;
+          setState(() => _voiceState = _ComposerVoiceState.idle);
+        });
+      }
     }
-    await widget.onSendVoice(p, elapsed);
-  }
-
-  Future<void> _cancelLockedRecord() async {
-    await _finishVoiceRecord(send: false);
-  }
-
-  Future<void> _sendLockedRecord() async {
-    await _finishVoiceRecord(send: true);
   }
 
   @override
@@ -7834,7 +7896,7 @@ class _ThreadComposerState extends State<_ThreadComposer> {
                             color: Colors.white.withValues(alpha: 0.08),
                           ),
                         ),
-                        child: _voiceRecording
+                        child: _isRecording
                             ? Padding(
                                 padding: const EdgeInsets.fromLTRB(
                                   14,
@@ -7844,171 +7906,43 @@ class _ThreadComposerState extends State<_ThreadComposer> {
                                 ),
                                 child: Row(
                                   children: [
-                                    if (!_voiceLocked)
-                                      Icon(
-                                        Icons.mic_rounded,
-                                        color: _voiceCancellingHint
-                                            ? Colors.redAccent
-                                            : const Color(0xFF22C55E),
-                                        size: 20,
+                                    const Icon(
+                                      Icons.mic_rounded,
+                                      color: Color(0xFF22C55E),
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      _fmtVoice(_voiceElapsed),
+                                      style: GoogleFonts.ptSans(
+                                        color: Colors.white,
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
                                       ),
-                                    if (!_voiceLocked) ...[
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        _fmtVoice(_voiceElapsed),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(
+                                        'Recording...',
                                         style: GoogleFonts.ptSans(
-                                          color: Colors.white,
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Transform.translate(
-                                          offset: Offset(
-                                            _voiceDragDx * 0.35,
-                                            0,
+                                          color: Colors.white.withValues(
+                                            alpha: 0.72,
                                           ),
-                                          child: Row(
-                                            children: [
-                                              Icon(
-                                                _voiceDragDy <= -20
-                                                    ? Icons.lock_open_rounded
-                                                    : Icons
-                                                          .keyboard_arrow_left_rounded,
-                                                color: _voiceCancellingHint
-                                                    ? Colors.redAccent
-                                                    : (_voiceDragDy <= -20
-                                                          ? const Color(
-                                                              0xFF22C55E,
-                                                            )
-                                                          : Colors.white
-                                                                .withValues(
-                                                                  alpha: 0.75,
-                                                                )),
-                                                size: 20,
-                                              ),
-                                              Text(
-                                                _voiceDragDy <= -20
-                                                    ? 'Slide up to lock'
-                                                    : (_voiceCancellingHint
-                                                          ? 'Release to cancel'
-                                                          : 'Slide to cancel'),
-                                                style: GoogleFonts.ptSans(
-                                                  color: _voiceCancellingHint
-                                                      ? Colors.redAccent
-                                                      : (_voiceDragDy <= -20
-                                                            ? const Color(
-                                                                0xFF22C55E,
-                                                              )
-                                                            : Colors.white
-                                                                  .withValues(
-                                                                    alpha: 0.68,
-                                                                  )),
-                                                  fontSize: 15,
-                                                ),
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
-                                            ],
-                                          ),
+                                          fontSize: 14.5,
                                         ),
+                                        overflow: TextOverflow.ellipsis,
                                       ),
-                                      Icon(
-                                        Icons.lock_outline_rounded,
-                                        color: Colors.white.withValues(
-                                          alpha: _voiceDragDy <= -20
-                                              ? 0.9
-                                              : 0.55,
-                                        ),
-                                        size: 18,
+                                    ),
+                                    IconButton(
+                                      visualDensity: VisualDensity.compact,
+                                      onPressed: () =>
+                                          unawaited(_stopVoiceRecord(send: false)),
+                                      tooltip: 'Cancel recording',
+                                      icon: const Icon(
+                                        Icons.close_rounded,
+                                        color: Colors.white70,
                                       ),
-                                    ] else ...[
-                                      Expanded(
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Row(
-                                              children: [
-                                                Text(
-                                                  _fmtVoice(_voiceElapsed),
-                                                  style: GoogleFonts.ptSans(
-                                                    color: Colors.white
-                                                        .withValues(alpha: 0.9),
-                                                    fontSize: 16,
-                                                    fontWeight: FontWeight.w600,
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 10),
-                                                Expanded(
-                                                  child: Row(
-                                                    children: List.generate(
-                                                      34,
-                                                      (_) => Expanded(
-                                                        child: Container(
-                                                          margin:
-                                                              const EdgeInsets.symmetric(
-                                                                horizontal: 1.1,
-                                                              ),
-                                                          height: 3,
-                                                          decoration: BoxDecoration(
-                                                            color: Colors.white
-                                                                .withValues(
-                                                                  alpha: 0.55,
-                                                                ),
-                                                            borderRadius:
-                                                                BorderRadius.circular(
-                                                                  5,
-                                                                ),
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 8),
-                                                Icon(
-                                                  Icons.info_outline_rounded,
-                                                  size: 20,
-                                                  color: Colors.white
-                                                      .withValues(alpha: 0.8),
-                                                ),
-                                              ],
-                                            ),
-                                            const SizedBox(height: 12),
-                                            Row(
-                                              children: [
-                                                IconButton(
-                                                  onPressed:
-                                                      _cancelLockedRecord,
-                                                  icon: const Icon(
-                                                    Icons
-                                                        .delete_outline_rounded,
-                                                    color: Colors.white70,
-                                                  ),
-                                                  tooltip: 'Delete recording',
-                                                ),
-                                                Expanded(
-                                                  child: Center(
-                                                    child: Text(
-                                                      _fmtVoice(_voiceElapsed),
-                                                      style: GoogleFonts.ptSans(
-                                                        color: const Color(
-                                                          0xFFFF667D,
-                                                        ),
-                                                        fontSize: 22,
-                                                        fontWeight:
-                                                            FontWeight.w700,
-                                                        letterSpacing: 1.1,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
+                                    ),
                                   ],
                                 ),
                               )
@@ -8096,13 +8030,13 @@ class _ThreadComposerState extends State<_ThreadComposer> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    if (_voiceLocked)
+                    if (_isRecording)
                       Material(
                         color: const Color(0xFF00A884),
                         shape: const CircleBorder(),
                         child: InkWell(
                           customBorder: const CircleBorder(),
-                          onTap: _sendLockedRecord,
+                          onTap: () => unawaited(_stopVoiceRecord(send: true)),
                           child: const SizedBox(
                             width: 48,
                             height: 48,
@@ -8110,6 +8044,22 @@ class _ThreadComposerState extends State<_ThreadComposer> {
                               Icons.send_rounded,
                               color: Colors.white,
                               size: 22,
+                            ),
+                          ),
+                        ),
+                      )
+                    else if (_voiceState == _ComposerVoiceState.uploading)
+                      Material(
+                        color: Colors.white.withValues(alpha: 0.18),
+                        shape: const CircleBorder(),
+                        child: const SizedBox(
+                          width: 48,
+                          height: 48,
+                          child: Padding(
+                            padding: EdgeInsets.all(12),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.2,
+                              color: Colors.white,
                             ),
                           ),
                         ),
@@ -8133,14 +8083,12 @@ class _ThreadComposerState extends State<_ThreadComposer> {
                         ),
                       )
                     else
-                      GestureDetector(
-                        onLongPressStart: (_) => unawaited(_startVoiceRecord()),
-                        onLongPressMoveUpdate: _onVoiceDrag,
-                        onLongPressEnd: (d) =>
-                            unawaited(_onVoiceLongPressEnd(d)),
-                        child: Material(
-                          color: kPrimaryBlue,
-                          shape: const CircleBorder(),
+                      Material(
+                        color: kPrimaryBlue,
+                        shape: const CircleBorder(),
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: () => unawaited(_startVoiceRecord()),
                           child: const SizedBox(
                             width: 48,
                             height: 48,

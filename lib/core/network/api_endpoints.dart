@@ -5,7 +5,8 @@ abstract final class ApiEndpoints {
     if (fromEnv.isNotEmpty) {
       return fromEnv.endsWith('/') ? fromEnv : '$fromEnv/';
     }
-    return 'http://192.168.1.18:4999/';
+    return 'https://mail.livera.ae/';
+    // return 'http://192.168.1.18:4999/';
   }
 
   static const String health = '/health';
@@ -33,6 +34,8 @@ abstract final class ApiEndpoints {
   /// PATCH same path as [chatMessages] — edit existing message (sender, time window).
   static const String chatMessageEdit = chatMessages;
   static const String chatGroups = '$chatPrefix/groups';
+  static const String agoraRtcToken = '$chatPrefix/call/agora-token';
+  static const String agoraCallInvite = '$chatPrefix/call/agora-invite';
   static const String chatGroupInvites = '$chatGroups/invites';
   static const String chatGroupInviteJoin = '$chatGroups/invite/join';
   static const String chatGroupMessages = '$chatGroups/messages';

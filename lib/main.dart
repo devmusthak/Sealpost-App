@@ -1,13 +1,13 @@
 import 'dart:async';
-
 import 'package:app_links/app_links.dart';
 import 'package:dio/dio.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
-
+import 'core/call/agora_call_service.dart';
 import 'core/mailto/mailto_link_service.dart';
 import 'core/share/share_receive_service.dart';
 import 'core/push/push_notification_service.dart';
@@ -18,8 +18,9 @@ import 'data/chat/chat_media_repository.dart';
 import 'data/chat/chat_repository.dart';
 import 'screens/chat/chat_forward_opener.dart';
 import 'screens/chat/chat_forward_opener_impl.dart';
+import 'screens/chat/controller/chat_controller.dart';
 import 'data/mail/mail_repository.dart';
-import 'data/session/session_storage.dart';
+import 'package:sealpost/data/session/session_storage.dart';
 import 'data/session/account_session_manager.dart';
 import 'firebase_options.dart';
 import 'push/firebase_messaging_background.dart';
@@ -28,6 +29,7 @@ import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
   final sessionStorage = await SessionStorage.create();
@@ -50,7 +52,9 @@ Future<void> main() async {
     ChatMediaRepository(Get.find<Dio>()),
     permanent: true,
   );
+  Get.put<ChatController>(ChatController(), permanent: true);
   Get.put<ChatForwardOpener>(ChatForwardOpenerImpl(), permanent: true);
+  Get.put<AgoraCallService>(AgoraCallService(), permanent: true);
   Get.put(
     MailtoLinkService(Get.find<SessionStorage>()),
     permanent: true,
@@ -117,8 +121,6 @@ class _SealpostAppState extends State<SealpostApp> with WidgetsBindingObserver {
         _goPresenceBackground();
         break;
       case null:
-        // First frames often report null; do not send offline — that raced with
-        // [resumed] on emulators and cleared presence while the app was active.
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
           final s2 = WidgetsBinding.instance.lifecycleState;

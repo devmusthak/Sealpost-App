@@ -11,11 +11,15 @@ import '../../../core/mailto/mailto_link_service.dart';
 import '../../../core/push/push_notification_service.dart';
 import '../../../data/auth/auth_repository.dart';
 import '../../../data/mail/mail_list_item.dart';
+import '../../../data/session/account_session_manager.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/app_text.dart';
 import '../../../widgets/account_switch_sheet.dart';
 import '../../compose/view/compose_view.dart';
+import '../../data_processing_agreement/view/data_processing_agreement_view.dart';
 import '../../mail_detail/view/mail_detail_view.dart';
+import '../../terms_of_service/view/terms_of_service_view.dart';
+import '../../chat_policy/view/chat_policy_view.dart';
 import '../controller/home_controller.dart';
 import 'mail_search_delegate.dart';
 
@@ -120,6 +124,23 @@ class _HomeScreenState extends State<HomeScreen> {
                             break;
                           case 'switch_account':
                             unawaited(AccountSwitchSheet.show(context));
+                            break;
+                          case 'terms':
+                            unawaited(Get.to<void>(() => const TermsOfServiceView()));
+                            break;
+                          case 'dpa':
+                            unawaited(
+                              Get.to<void>(() => const DataProcessingAgreementView()),
+                            );
+                            break;
+                          case 'chat_policy':
+                            unawaited(Get.to<void>(() => const ChatPolicyView()));
+                            break;
+                          case 'logout':
+                            unawaited(
+                              Get.find<AccountSessionManager>()
+                                  .logoutActiveAccount(),
+                            );
                             break;
                         }
                       },
@@ -401,6 +422,38 @@ class _HomeSearchAppBar extends StatelessWidget {
               child: ProfileMenuItem(
                 icon: Icons.switch_account_rounded,
                 label: 'Switch account',
+              ),
+            ),
+            PopupMenuDivider(height: 1 , color: Colors.white.withValues(alpha: 0.08)),
+            PopupMenuItem<String>(
+              value: 'terms',
+              child: ProfileMenuItem(
+                icon: Icons.gavel_rounded,
+                label: 'Terms of Service',
+              ),
+            ),
+            PopupMenuDivider(height: 1 , color: Colors.white.withValues(alpha: 0.08)),
+            PopupMenuItem<String>(
+              value: 'dpa',
+              child: ProfileMenuItem(
+                icon: Icons.privacy_tip_outlined,
+                label: 'Data Processing Agreement',
+              ),
+            ),
+            PopupMenuDivider(height: 1 , color: Colors.white.withValues(alpha: 0.08)),
+            PopupMenuItem<String>(
+              value: 'chat_policy',
+              child: ProfileMenuItem(
+                icon: Icons.policy_outlined,
+                label: 'Chat Policy',
+              ),
+            ),
+            PopupMenuDivider(height: 1 , color: Colors.white.withValues(alpha: 0.08)),
+            PopupMenuItem<String>(
+              value: 'logout',
+              child: ProfileMenuItem(
+                icon: Icons.logout_rounded,
+                label: 'Logout',
               ),
             ),
           ],

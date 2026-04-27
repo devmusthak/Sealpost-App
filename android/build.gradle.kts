@@ -7,6 +7,9 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 subprojects {
     afterEvaluate {
         extensions.findByType(BaseExtension::class.java)?.apply {
+            // Some Flutter plugins hardcode lower compileSdk values (31/33/34).
+            // Force a minimum of 36 to satisfy newer androidx AAR metadata.
+            compileSdkVersion(36)
             compileOptions {
                 sourceCompatibility = JavaVersion.VERSION_17
                 targetCompatibility = JavaVersion.VERSION_17

@@ -140,15 +140,46 @@ class SessionStorage {
     return true;
   }
 
+  /// Removes one account. If it was active, switches to another if available.
+  /// Returns next active account id, or null when none remain.
+  Future<String?> removeAccount(String accountId) async {
+    final id = accountId.trim();
+    if (id.isEmpty) return activeAccountId;
+    final accounts = await _loadAllAccounts();
+    final remaining = accounts.where((a) => a.accountId != id).toList();
+    await _writeAccounts(remaining);
+
+    final currentActive = activeAccountId;
+    if (remaining.isEmpty) {
+      await _prefs.remove(_activeAccountId);
+      await _clearLegacySessionKeys();
+      return null;
+    }
+    if (currentActive == id) {
+      final next = remaining.first;
+      await _prefs.setString(_activeAccountId, next.accountId);
+      await _prefs.setString(_token, next.token);
+      await _prefs.setString(_userId, next.userId);
+      await _prefs.setString(_email, next.email);
+      await _prefs.setString(_name, next.name);
+      return next.accountId;
+    }
+    return currentActive ?? remaining.first.accountId;
+  }
+
   Future<void> clear() async {
     await _secure.delete(key: _accountsSecureKey);
     await _prefs.remove(_activeAccountId);
+    await _clearLegacySessionKeys();
+    await _prefs.remove(_mailtoDismissedKeys);
+    await _prefs.remove(_mailtoIncompleteLaunchKey);
+  }
+
+  Future<void> _clearLegacySessionKeys() async {
     await _prefs.remove(_token);
     await _prefs.remove(_userId);
     await _prefs.remove(_email);
     await _prefs.remove(_name);
-    await _prefs.remove(_mailtoDismissedKeys);
-    await _prefs.remove(_mailtoIncompleteLaunchKey);
   }
 
   /// Keys for mailto links already handled (survives app restart).

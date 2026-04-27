@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../../data/chat/chat_repository.dart';
+import '../controller/chat_controller.dart';
 
 class GroupInvitePreviewWidget extends StatefulWidget {
   const GroupInvitePreviewWidget({
@@ -19,6 +20,10 @@ class GroupInvitePreviewWidget extends StatefulWidget {
 }
 
 class _GroupInvitePreviewWidgetState extends State<GroupInvitePreviewWidget> {
+  // In-memory cache avoids re-showing loading when reopening same chat.
+  static final Map<String, Map<String, dynamic>> _inviteInfoCache =
+      <String, Map<String, dynamic>>{};
+
   Map<String, dynamic>? _info;
   bool _busy = false;
   bool _joining = false;
@@ -26,14 +31,35 @@ class _GroupInvitePreviewWidgetState extends State<GroupInvitePreviewWidget> {
   @override
   void initState() {
     super.initState();
+    final cached = _inviteInfoCache[widget.inviteId];
+    if (cached != null) {
+      _info = Map<String, dynamic>.from(cached);
+    }
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant GroupInvitePreviewWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.inviteId == widget.inviteId) return;
+    final cached = _inviteInfoCache[widget.inviteId];
+    setState(() {
+      _info = cached != null ? Map<String, dynamic>.from(cached) : null;
+    });
     _load();
   }
 
   Future<void> _load() async {
-    setState(() => _busy = true);
+    if (_info != null) {
+      // We already have cached content; refresh silently in background.
+      _busy = false;
+    } else {
+      setState(() => _busy = true);
+    }
     try {
       final info = await Get.find<ChatRepository>().fetchGroupInviteInfo(widget.inviteId);
       if (!mounted) return;
+      _inviteInfoCache[widget.inviteId] = Map<String, dynamic>.from(info);
       setState(() => _info = info);
     } catch (_) {
       // Keep compact fallback UI.
@@ -47,6 +73,10 @@ class _GroupInvitePreviewWidgetState extends State<GroupInvitePreviewWidget> {
     setState(() => _joining = true);
     try {
       await Get.find<ChatRepository>().joinGroupByInvite(widget.inviteId);
+      if (Get.isRegistered<ChatController>()) {
+        await Get.find<ChatController>().refreshContacts();
+      }
+      _inviteInfoCache.remove(widget.inviteId);
       if (!mounted) return;
       await _load();
       if (!mounted) return;

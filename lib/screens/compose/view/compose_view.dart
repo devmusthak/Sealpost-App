@@ -12,12 +12,12 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../../core/mailto/mailto_link_service.dart';
 import '../../../data/auth/auth_repository.dart';
-import '../../../data/mail/compose_prefill.dart';
+import 'package:sealpost/data/mail/compose_prefill.dart';
 import '../../../data/mail/mail_repository.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/discard_compose_confirmation_dialog.dart';
 
-export '../../../data/mail/compose_prefill.dart';
+export 'package:sealpost/data/mail/compose_prefill.dart';
 
 /// Dark compose screen — From, To, Cc, Subject, body.
 class ComposeScreen extends StatefulWidget {

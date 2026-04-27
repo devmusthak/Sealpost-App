@@ -24,11 +24,22 @@ class ChatLinkPreviewCard extends StatefulWidget {
 }
 
 class _ChatLinkPreviewCardState extends State<ChatLinkPreviewCard> {
+  // Session-level memory cache to avoid loading flicker on route re-entry.
+  static final Map<String, LinkPreviewData> _previewCache =
+      <String, LinkPreviewData>{};
+
   late Future<LinkPreviewData> _future;
+
+  String get _cacheKey => LinkPreviewService.cacheKeyForUrl(widget.url);
 
   @override
   void initState() {
     super.initState();
+    final cached =
+        _previewCache[_cacheKey] ?? LinkPreviewService.instance.peek(widget.url);
+    if (cached != null) {
+      _previewCache[_cacheKey] = cached;
+    }
     _future = LinkPreviewService.instance.get(widget.url);
   }
 
@@ -36,6 +47,11 @@ class _ChatLinkPreviewCardState extends State<ChatLinkPreviewCard> {
   void didUpdateWidget(ChatLinkPreviewCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.url != widget.url) {
+      final cached =
+          _previewCache[_cacheKey] ?? LinkPreviewService.instance.peek(widget.url);
+      if (cached != null) {
+        _previewCache[_cacheKey] = cached;
+      }
       _future = LinkPreviewService.instance.get(widget.url);
     }
   }
@@ -56,8 +72,13 @@ class _ChatLinkPreviewCardState extends State<ChatLinkPreviewCard> {
     return FutureBuilder<LinkPreviewData>(
       future: _future,
       builder: (context, snap) {
+        if (snap.data != null) {
+          _previewCache[_cacheKey] = snap.data!;
+        }
         final data =
-            LinkPreviewService.instance.peek(widget.url) ?? snap.data;
+            _previewCache[_cacheKey] ??
+            LinkPreviewService.instance.peek(widget.url) ??
+            snap.data;
         if (data == null &&
             snap.connectionState == ConnectionState.waiting) {
           return _PreviewSkeleton(maxWidth: maxW, isOutgoing: widget.isOutgoing);

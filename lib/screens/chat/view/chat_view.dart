@@ -12,9 +12,13 @@ import '../../../data/chat/chat_list_last_message_preview.dart';
 import '../../../data/chat/chat_contact.dart';
 import '../../../data/chat/chat_repository.dart';
 import '../../../data/chat/chat_user.dart';
+import '../../../data/session/account_session_manager.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/chat_action_dialog.dart';
 import '../../../widgets/account_switch_sheet.dart';
+import '../../chat_policy/view/chat_policy_view.dart';
+import '../../data_processing_agreement/view/data_processing_agreement_view.dart';
+import '../../terms_of_service/view/terms_of_service_view.dart';
 import '../chat_open_thread.dart';
 import '../controller/chat_controller.dart';
 import 'create_group_view.dart';
@@ -51,6 +55,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     } else {
       _controller = Get.put(ChatController());
     }
+    unawaited(_controller.refreshContacts());
   }
 
   @override
@@ -147,6 +152,22 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
     if (value == 'Switch account') {
       await AccountSwitchSheet.show(context);
+      return;
+    }
+    if (value == 'Terms of Service') {
+      await Get.to<void>(() => const TermsOfServiceView());
+      return;
+    }
+    if (value == 'Data Processing Agreement') {
+      await Get.to<void>(() => const DataProcessingAgreementView());
+      return;
+    }
+    if (value == 'Chat Policy') {
+      await Get.to<void>(() => const ChatPolicyView());
+      return;
+    }
+    if (value == 'Logout') {
+      await Get.find<AccountSessionManager>().logoutActiveAccount();
       return;
     }
   }
@@ -612,6 +633,38 @@ class _ChatSearchHeader extends StatelessWidget {
               child: _ProfileMenuItem(
                 icon: Icons.switch_account_rounded,
                 label: 'Switch account',
+              ),
+            ),
+            PopupMenuDivider(height: 1, color: Color(0x14FFFFFF)),
+            PopupMenuItem<String>(
+              value: 'Terms of Service',
+              child: _ProfileMenuItem(
+                icon: Icons.gavel_rounded,
+                label: 'Terms of Service',
+              ),
+            ),
+            PopupMenuDivider(height: 1, color: Color(0x14FFFFFF)),
+            PopupMenuItem<String>(
+              value: 'Data Processing Agreement',
+              child: _ProfileMenuItem(
+                icon: Icons.privacy_tip_outlined,
+                label: 'Data Processing Agreement',
+              ),
+            ),
+            PopupMenuDivider(height: 1, color: Color(0x14FFFFFF)),
+            PopupMenuItem<String>(
+              value: 'Chat Policy',
+              child: _ProfileMenuItem(
+                icon: Icons.policy_outlined,
+                label: 'Chat Policy',
+              ),
+            ),
+            PopupMenuDivider(height: 1, color: Color(0x14FFFFFF)),
+            PopupMenuItem<String>(
+              value: 'Logout',
+              child: _ProfileMenuItem(
+                icon: Icons.logout_rounded,
+                label: 'Logout',
               ),
             ),
           ],
