@@ -399,6 +399,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 ),
                 Expanded(
                   child: Obx(() {
+                    final typingTick = _controller.typingPeerIds.length;
+                    if (typingTick < 0) {
+                      return const SizedBox.shrink();
+                    }
                     if (_controller.isLoading.value &&
                         _controller.contacts.isEmpty) {
                       return const Center(

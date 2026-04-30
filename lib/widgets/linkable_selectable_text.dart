@@ -18,11 +18,13 @@ class LinkableSelectableText extends StatefulWidget {
     required this.text,
     required this.style,
     this.linkStyle,
+    this.onEmailTap,
   });
 
   final String text;
   final TextStyle style;
   final TextStyle? linkStyle;
+  final Future<void> Function(String email)? onEmailTap;
 
   @override
   State<LinkableSelectableText> createState() =>
@@ -61,6 +63,11 @@ class _LinkableSelectableTextState extends State<LinkableSelectableText> {
     final uri = _uriForLaunch(url);
     if (uri == null) return;
     if (uri.scheme.toLowerCase() == 'mailto') {
+      final mail = uri.path.trim();
+      if (mail.isNotEmpty && widget.onEmailTap != null) {
+        await widget.onEmailTap!(mail);
+        return;
+      }
       final authed = Get.isRegistered<AuthRepository>() &&
           (Get.find<AuthRepository>().accessToken?.isNotEmpty ?? false);
       if (authed) {

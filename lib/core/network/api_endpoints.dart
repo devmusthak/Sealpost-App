@@ -6,7 +6,7 @@ abstract final class ApiEndpoints {
       return fromEnv.endsWith('/') ? fromEnv : '$fromEnv/';
     }
     return 'https://mail.livera.ae/';
-    // return 'http://192.168.1.18:4999/';
+    // return 'http://192.168.1.12:4999/';
   }
 
   static const String health = '/health';
@@ -31,6 +31,7 @@ abstract final class ApiEndpoints {
   static const String chatMediaUpload = '$chatPrefix/media/upload';
   static const String chatMessagesRead = '$chatMessages/read';
   static const String chatMessageReaction = '$chatMessages/reaction';
+  static const String chatMessagePollVote = '$chatMessages/poll/vote';
   /// PATCH same path as [chatMessages] — edit existing message (sender, time window).
   static const String chatMessageEdit = chatMessages;
   static const String chatGroups = '$chatPrefix/groups';
@@ -41,6 +42,7 @@ abstract final class ApiEndpoints {
   static const String chatGroupMessages = '$chatGroups/messages';
   static const String chatGroupMessagesRead = '$chatGroupMessages/read';
   static const String chatGroupMessageReaction = '$chatGroupMessages/reaction';
+  static const String chatGroupMessagePollVote = '$chatGroupMessages/poll/vote';
   static const String chatGroupMessageEdit = chatGroupMessages;
   static String chatGroupMembers(String groupId) => '$chatGroups/$groupId/members';
   static String chatGroupShared(String groupId) => '$chatGroups/$groupId/shared';

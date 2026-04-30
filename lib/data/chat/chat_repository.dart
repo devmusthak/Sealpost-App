@@ -330,6 +330,44 @@ class ChatRepository {
     return ChatMessageDto.fromJson(Map<String, dynamic>.from(msgRaw));
   }
 
+  Future<ChatMessageDto> voteDirectPoll({
+    required String peerId,
+    required String messageId,
+    required String optionId,
+  }) async {
+    final token = Get.find<AuthRepository>().accessToken;
+    if (token == null || token.isEmpty) throw StateError('Not signed in');
+    final res = await _dio.post<dynamic>(
+      ApiEndpoints.chatMessagePollVote,
+      data: {'peerId': peerId, 'messageId': messageId, 'optionId': optionId},
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
+    final raw = res.data;
+    if (raw is! Map || raw['message'] is! Map) {
+      throw StateError('Invalid poll vote response');
+    }
+    return ChatMessageDto.fromJson(Map<String, dynamic>.from(raw['message'] as Map));
+  }
+
+  Future<ChatMessageDto> voteGroupPoll({
+    required String groupId,
+    required String messageId,
+    required String optionId,
+  }) async {
+    final token = Get.find<AuthRepository>().accessToken;
+    if (token == null || token.isEmpty) throw StateError('Not signed in');
+    final res = await _dio.post<dynamic>(
+      ApiEndpoints.chatGroupMessagePollVote,
+      data: {'groupId': groupId, 'messageId': messageId, 'optionId': optionId},
+      options: Options(headers: {'Authorization': 'Bearer $token'}),
+    );
+    final raw = res.data;
+    if (raw is! Map || raw['message'] is! Map) {
+      throw StateError('Invalid poll vote response');
+    }
+    return ChatMessageDto.fromJson(Map<String, dynamic>.from(raw['message'] as Map));
+  }
+
   /// Sender-only; server rejects outside the edit window.
   Future<ChatMessageDto> editChatMessage({
     required String peerId,

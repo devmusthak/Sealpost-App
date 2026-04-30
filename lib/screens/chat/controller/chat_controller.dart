@@ -107,15 +107,19 @@ class ChatController extends GetxController {
   void _ensureSocketConnected() {
     final token = Get.find<AuthRepository>().accessToken;
     if (token == null || token.isEmpty) return;
-    if (_socket == null || _socket!.disconnected) {
+    if (_socket == null) {
       _connectSocket();
+      return;
+    }
+    if (_socket!.disconnected) {
+      _socket!.connect();
     }
   }
 
   void _connectSocket() {
     final token = Get.find<AuthRepository>().accessToken;
     if (token == null || token.isEmpty) return;
-    _socket?.dispose();
+    if (_socket != null) return;
     _socket = io.io(
       ApiEndpoints.socketOrigin,
       io.OptionBuilder()
@@ -128,6 +132,8 @@ class ChatController extends GetxController {
       unawaited(refreshContacts());
     });
     _socket!.on('chat:typing', _onTyping);
+    _socket!.on('chat:voice:recording', _onTyping);
+    _socket!.on('voice_recording', _onTyping);
     _socket!.on('call:invite', _onIncomingCallInvite);
     _socket!.onConnect((_) {
       final peer = _openConversationPeerId;

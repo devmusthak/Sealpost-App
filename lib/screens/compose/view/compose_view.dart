@@ -47,9 +47,10 @@ class _ComposeScreenState extends State<ComposeScreen> {
 
   /// To addresses shown as chips only when [length >= 2]. One address stays in [_toInputController] only.
   final List<String> _toRecipients = [];
+  final List<String> _ccRecipients = [];
 
   final _toInputController = TextEditingController();
-  final _ccController = TextEditingController();
+  final _ccInputController = TextEditingController();
   final _subjectController = TextEditingController();
   final _bodyController = TextEditingController();
 
@@ -118,7 +119,12 @@ class _ComposeScreenState extends State<ComposeScreen> {
     }
     final cc = pre.ccLine?.trim();
     if (cc != null && cc.isNotEmpty) {
-      _ccController.text = cc;
+      final ccParts = _parseToParts(cc);
+      if (ccParts.length >= 2) {
+        _ccRecipients.addAll(ccParts);
+      } else if (ccParts.length == 1) {
+        _ccInputController.text = ccParts.first;
+      }
     }
     _subjectController.text = pre.subject;
     _bodyController.text = pre.body;
@@ -131,7 +137,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
       Get.find<MailtoLinkService>().consumeMailtoSource(mailto);
     }
     _toInputController.dispose();
-    _ccController.dispose();
+    _ccInputController.dispose();
     _subjectController.dispose();
     _bodyController.dispose();
     _toFocus.dispose();
@@ -224,7 +230,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
         .toList();
   }
 
-  bool get _useToChips => _toRecipients.length >= 2;
+  bool get _useToChips => _toRecipients.isNotEmpty;
 
   void _addParsedToAddresses(String raw) {
     for (final a in _parseToParts(raw)) {
@@ -255,6 +261,72 @@ class _ComposeScreenState extends State<ComposeScreen> {
     return _parseToParts(_toInputController.text);
   }
 
+  bool get _useCcChips => _ccRecipients.isNotEmpty;
+
+  void _addParsedCcAddresses(String raw) {
+    for (final a in _parseToParts(raw)) {
+      if (!_ccRecipients.contains(a)) {
+        _ccRecipients.add(a);
+      }
+    }
+  }
+
+  void _collapseToSingleCcFieldIfNeeded() {
+    if (_ccRecipients.length != 1) return;
+    _ccInputController.text = _ccRecipients.first;
+    _ccRecipients.clear();
+  }
+
+  List<String> _allCcRecipientEmails() {
+    if (_useCcChips) {
+      final out = List<String>.from(_ccRecipients);
+      for (final p in _parseToParts(_ccInputController.text)) {
+        if (!out.contains(p)) {
+          out.add(p);
+        }
+      }
+      return out;
+    }
+    return _parseToParts(_ccInputController.text);
+  }
+
+  void _commitPendingCcInput() {
+    final raw = _ccInputController.text.trim();
+    if (raw.isEmpty) return;
+
+    if (_useCcChips) {
+      _addParsedCcAddresses(raw);
+      _ccInputController.clear();
+      if (mounted) setState(() {});
+      return;
+    }
+
+    final parts = _parseToParts(raw);
+    if (parts.length >= 2) {
+      _ccRecipients.clear();
+      for (final p in parts) {
+        if (!_ccRecipients.contains(p)) {
+          _ccRecipients.add(p);
+        }
+      }
+      _ccInputController.clear();
+    }
+    if (mounted) setState(() {});
+  }
+
+  void _onCcInputChanged(String value) {
+    if (value.isEmpty) return;
+    final last = value[value.length - 1];
+    if (last == ',' || last == ';') {
+      final head = value.substring(0, value.length - 1).trim();
+      _ccInputController.text = '';
+      if (head.isNotEmpty) {
+        _addParsedCcAddresses(head);
+      }
+      if (mounted) setState(() {});
+    }
+  }
+
   void _commitPendingToInput() {
     final raw = _toInputController.text.trim();
     if (raw.isEmpty) return;
@@ -280,7 +352,6 @@ class _ComposeScreenState extends State<ComposeScreen> {
   }
 
   void _onToInputChanged(String value) {
-    if (!_useToChips) return;
     if (value.isEmpty) return;
     final last = value[value.length - 1];
     if (last == ',' || last == ';') {
@@ -301,6 +372,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
   Future<void> _onSend() async {
     _dismissKeyboard();
     _commitPendingToInput();
+    _commitPendingCcInput();
     final allTo = _allToRecipientEmails();
     if (allTo.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -332,7 +404,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
     try {
       await Get.find<MailRepository>().sendComposeMail(
         to: allTo,
-        cc: _parseToParts(_ccController.text),
+        cc: _allCcRecipientEmails(),
         subject: _subjectController.text.trim(),
         text: _bodyController.text,
         attachments: List<MailOutgoingAttachment>.from(_attachments),
@@ -387,7 +459,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
 
   Future<bool> _confirmDiscardIfNeeded() async {
     final dirty = _allToRecipientEmails().isNotEmpty ||
-        _ccController.text.trim().isNotEmpty ||
+        _allCcRecipientEmails().isNotEmpty ||
         _subjectController.text.trim().isNotEmpty ||
         _bodyController.text.trim().isNotEmpty ||
         _attachments.isNotEmpty;
@@ -498,17 +570,7 @@ class _ComposeScreenState extends State<ComposeScreen> {
                   _divider,
                   _labeledField(
                     label: 'Cc',
-                    field: TextField(
-                      controller: _ccController,
-                      focusNode: _ccFocus,
-                      style: _inputStyle,
-                      cursorColor: kPrimaryBlue,
-                      keyboardType: TextInputType.emailAddress,
-                      textInputAction: TextInputAction.next,
-                      decoration: _lineDecoration(),
-                      onTapOutside: (_) => _dismissKeyboard(),
-                      onSubmitted: (_) => _subjectFocus.requestFocus(),
-                    ),
+                    field: _ccRecipientsField(),
                   ),
                   _divider,
                   _labeledField(
@@ -702,6 +764,104 @@ class _ComposeScreenState extends State<ComposeScreen> {
           setState(() {
             _toRecipients.remove(email);
             _collapseToSingleToFieldIfNeeded();
+          });
+        },
+        deleteIcon: const Icon(
+          Icons.close_rounded,
+          size: 16,
+          color: Color(0xFF9AA0A6),
+        ),
+      ),
+    );
+  }
+
+  Widget _ccRecipientsField() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_useCcChips)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: SizedBox(
+              height: _toChipsRowHeight,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                clipBehavior: Clip.none,
+                itemCount: _ccRecipients.length,
+                separatorBuilder: (_, _) => const SizedBox(width: 6),
+                itemBuilder: (context, i) => _ccChip(_ccRecipients[i]),
+              ),
+            ),
+          ),
+        TextField(
+          controller: _ccInputController,
+          focusNode: _ccFocus,
+          style: _inputStyle,
+          cursorColor: kPrimaryBlue,
+          keyboardType: TextInputType.emailAddress,
+          textInputAction: TextInputAction.next,
+          decoration: _lineDecoration(
+            hint: _useCcChips
+                ? 'Add another'
+                : 'Email (comma separates more than one)',
+          ),
+          onTapOutside: (_) => _dismissKeyboard(),
+          onChanged: _onCcInputChanged,
+          onSubmitted: (_) {
+            _commitPendingCcInput();
+            _subjectFocus.requestFocus();
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _ccChip(String email) {
+    final labelStyle = GoogleFonts.ptSans(
+      fontSize: 13,
+      color: _toChipTextColor,
+      height: 1.25,
+      fontWeight: FontWeight.w400,
+    );
+    return Theme(
+      data: Theme.of(context).copyWith(
+        canvasColor: _toChipFill,
+        colorScheme: Theme.of(context).colorScheme.copyWith(
+          surface: _toChipFill,
+          onSurface: _toChipTextColor,
+          surfaceContainerHighest: _toChipFill,
+        ),
+        chipTheme: ChipThemeData(
+          backgroundColor: _toChipFill,
+          selectedColor: _toChipFill,
+          disabledColor: _toChipFill,
+          deleteIconColor: const Color(0xFF9AA0A6),
+          labelStyle: labelStyle,
+          secondaryLabelStyle: labelStyle,
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+          side: const BorderSide(color: _toChipBorderColor),
+          elevation: 0,
+          pressElevation: 0,
+        ),
+      ),
+      child: InputChip(
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        visualDensity: const VisualDensity(horizontal: -2, vertical: -2),
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 0),
+        color: WidgetStateProperty.all<Color>(_toChipFill),
+        side: const WidgetStateBorderSide.fromMap(
+          <WidgetStatesConstraint, BorderSide>{
+            WidgetState.any: BorderSide(color: _toChipBorderColor),
+          },
+        ),
+        label: Text(email, style: labelStyle),
+        onDeleted: () {
+          setState(() {
+            _ccRecipients.remove(email);
+            _collapseToSingleCcFieldIfNeeded();
           });
         },
         deleteIcon: const Icon(

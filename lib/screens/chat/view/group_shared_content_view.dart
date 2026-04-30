@@ -133,9 +133,9 @@ class _GroupSharedContentScreenState extends State<GroupSharedContentScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF121212),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF202124),
+        backgroundColor: const Color(0xFF000000),
         foregroundColor: Colors.white,
         title: const Text('Media, links, documents'),
         bottom: TabBar(
@@ -193,7 +193,7 @@ class _GroupSharedContentScreenState extends State<GroupSharedContentScreen>
                             fit: StackFit.expand,
                             children: [
                               ColoredBox(
-                                color: const Color(0xFF1E1F20),
+                                color: const Color(0xFF000000),
                                 child: Image.network(
                                   tile.url,
                                   fit: BoxFit.cover,
@@ -240,7 +240,7 @@ class _GroupSharedContentScreenState extends State<GroupSharedContentScreen>
                           ? '${doc.ext.toUpperCase()} · ${doc.sizeBytes} bytes'
                           : (it.createdAt?.toLocal().toString() ?? '');
                       return Card(
-                        color: const Color(0xFF1E1F20),
+                        color: const Color(0xFF000000),
                         child: ListTile(
                           onTap: () {
                             Navigator.of(context).push(

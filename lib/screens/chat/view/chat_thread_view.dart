@@ -25,6 +25,7 @@ import '../../../core/push/local_notification_service.dart';
 import '../../../data/auth/auth_repository.dart';
 import '../../../data/chat/chat_image_message.dart';
 import '../../../data/chat/chat_media_repository.dart';
+import '../../../data/chat/chat_poll_message.dart';
 import '../../../data/chat/chat_contact.dart';
 import '../../../data/chat/chat_message_dto.dart';
 import '../../../data/chat/chat_repository.dart';
@@ -41,6 +42,7 @@ import '../widgets/chat_message_document.dart';
 import '../widgets/chat_message_images.dart';
 import '../widgets/chat_message_voice.dart';
 import '../widgets/chat_message_video.dart';
+import '../widgets/chat_poll_card.dart';
 import '../widgets/group_invite_preview_widget.dart';
 import 'chat_image_preview_screen.dart';
 import 'chat_image_viewer_screen.dart';
@@ -49,6 +51,8 @@ import 'agora_audio_call_screen.dart';
 import 'chat_video_preview_screen.dart';
 import 'chat_video_viewer_screen.dart';
 import 'group_info_view.dart';
+import 'create_poll_view.dart';
+import 'poll_results_view.dart';
 
 enum OutboundDelivery { sending, sent, delivered, seen, failed }
 
@@ -200,6 +204,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   Timer? _peerVoiceRecordingClear;
 
   Timer? _typingStopTimer;
+  Timer? _socketBindRetry;
 
   /// Throttle repeated `typing: true` (server ~450ms gate).
   DateTime? _lastTypingTrueSent;
@@ -847,7 +852,12 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       LocalNotificationService.clearChatNotificationsForPeer(_conversationId),
     );
     final s = c.chatSocket;
-    if (s == null) return;
+    if (s == null) {
+      _socketBindRetry?.cancel();
+      _socketBindRetry = Timer(const Duration(milliseconds: 600), _bindSocket);
+      return;
+    }
+    _socketBindRetry?.cancel();
     s.on('chat:message', _onSocketMessage);
     s.on('chat:message:delivered', _onDelivered);
     s.on('chat:message:seen', _onSeen);
@@ -857,12 +867,17 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     s.on('chat:peer:delivery_ready', _onPeerDeliveryReady);
     s.on('chat:reaction', _onSocketReaction);
     s.on('chat:message:edited', _onSocketMessage);
+    s.on('poll_created', _onSocketMessage);
+    s.on('poll_voted', _onSocketMessage);
+    s.on('poll_ended', _onSocketMessage);
     s.on('chat:voice:played', _onVoicePlayed);
     s.on('voice_message_played', _onVoicePlayed);
     s.on('chat:voice_message_played', _onVoicePlayed);
   }
 
   void _unbindSocket() {
+    _socketBindRetry?.cancel();
+    _socketBindRetry = null;
     if (!Get.isRegistered<ChatController>()) return;
     final c = Get.find<ChatController>();
     c.setConversationOpenPeer(null);
@@ -876,6 +891,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     s?.off('chat:peer:delivery_ready', _onPeerDeliveryReady);
     s?.off('chat:reaction', _onSocketReaction);
     s?.off('chat:message:edited', _onSocketMessage);
+    s?.off('poll_created', _onSocketMessage);
+    s?.off('poll_voted', _onSocketMessage);
+    s?.off('poll_ended', _onSocketMessage);
     s?.off('chat:voice:played', _onVoicePlayed);
     s?.off('voice_message_played', _onVoicePlayed);
     s?.off('chat:voice_message_played', _onVoicePlayed);
@@ -991,8 +1009,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
   bool get _hasMessageSelection => _selectedMessageIds.isNotEmpty;
 
   /// Peer live activity chip (typing or voice recording).
-  bool get _showPeerActivityBubble =>
-      (_peerVoiceRecording || _peerTyping) && _input.text.trim().isEmpty;
+  bool get _showPeerActivityBubble => (_peerVoiceRecording || _peerTyping);
   bool get _showPeerVoiceRecordingBubble =>
       _showPeerActivityBubble && _peerVoiceRecording;
 
@@ -1095,17 +1112,29 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     if (ChatVideoMessage.tryParse(raw) != null) return false;
     if (ChatVoiceMessage.tryParse(raw) != null) return false;
     if (ChatDocumentMessage.tryParse(raw) != null) return false;
+    final poll = ChatPollMessage.tryParse(raw);
+    if (poll != null) {
+      return _canEditPollMessage(poll);
+    }
     final age = DateTime.now().difference(msg.createdAt);
     return age <= _kMessageEditWindow;
   }
 
-  void _beginEditingSelectedMessage() {
+  bool _canEditPollMessage(ChatPollMessage poll) {
+    if (poll.createdBy != _myId) return false;
+    if (poll.isEndedAt(DateTime.now().toUtc())) return false;
+    // Keep editing safe: allow updates before first vote.
+    if (poll.votes.isNotEmpty) return false;
+    return true;
+  }
+
+  void _beginEditingSelectedMessage() async {
     final msg = _singleSelectedMessage();
     if (msg == null || !_canEditMessage(msg)) {
       _showThreadSnackBar(
         SnackBar(
           content: Text(
-            'You can only edit your own messages within 5 minutes.',
+            'You can edit only your recent messages. Polls can be edited before votes start.',
             style: GoogleFonts.ptSans(),
           ),
           behavior: SnackBarBehavior.floating,
@@ -1113,8 +1142,15 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       );
       return;
     }
+    final raw = _ForwardedPayloadParse.stripForDisplay(msg.body) ?? msg.body;
+    final poll = ChatPollMessage.tryParse(raw);
+    if (poll != null) {
+      _removeReactionOverlayEntryOnly();
+      await _editPollMessage(msg, poll);
+      return;
+    }
     _removeReactionOverlayEntryOnly();
-    final stripped = _ForwardedPayloadParse.stripForDisplay(msg.body);
+    final stripped = _ForwardedPayloadParse.stripForDisplay(raw);
     setState(() {
       _replyTarget = null;
       _editingMessageId = msg.id;
@@ -1127,6 +1163,79 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _composerFocus.requestFocus();
     });
+  }
+
+  Future<void> _editPollMessage(_UiMsg msg, ChatPollMessage poll) async {
+    final result = await Navigator.of(context).push<CreatePollResult>(
+      MaterialPageRoute(
+        builder: (_) => CreatePollScreen(
+          title: 'Edit Poll',
+          submitLabel: 'Update Poll',
+          initialQuestion: poll.question,
+          initialOptions: poll.options.map((e) => e.text).toList(),
+          initialEndsAtUtc: poll.endsAtUtc,
+          initialVisibleAnswers: poll.visibleAnswers,
+        ),
+      ),
+    );
+    if (!mounted || result == null) return;
+    final updatedOptions = <ChatPollOption>[];
+    for (var i = 0; i < result.options.length; i++) {
+      final old = i < poll.options.length ? poll.options[i] : null;
+      updatedOptions.add(
+        ChatPollOption(
+          optionId: old?.optionId ?? 'opt_${i + 1}_${DateTime.now().microsecondsSinceEpoch}',
+          text: result.options[i],
+          voteCount: old?.voteCount ?? 0,
+        ),
+      );
+    }
+    final updated = poll.copyWith(
+      options: updatedOptions,
+      votes: const <ChatPollVote>[],
+      status: result.endsAtUtc.isAfter(DateTime.now().toUtc()) ? 'active' : 'ended',
+    );
+    final body = ChatPollMessage(
+      pollId: poll.pollId,
+      question: result.question,
+      options: updated.options,
+      votes: updated.votes,
+      createdBy: poll.createdBy,
+      createdAtUtc: poll.createdAtUtc,
+      endsAtUtc: result.endsAtUtc,
+      allowMultipleAnswers: poll.allowMultipleAnswers,
+      visibleAnswers: result.visibleAnswers,
+      status: updated.status,
+    ).encode();
+
+    try {
+      final dto = await _editMessageRemote(messageId: msg.id, body: body);
+      if (!mounted) return;
+      setState(() {
+        final i = _messages.indexWhere((m) => m.id == dto.id);
+        if (i >= 0) _mergeRemoteDtoIntoIndex(i, dto);
+        _selectedMessageIds.clear();
+      });
+    } on DioException catch (e) {
+      if (!mounted) return;
+      final em = e.response?.data is Map
+          ? '${(e.response!.data as Map)['message'] ?? ''}'.trim()
+          : '';
+      _showThreadSnackBar(
+        SnackBar(
+          content: Text(em.isNotEmpty ? em : 'Could not update poll', style: GoogleFonts.ptSans()),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      _showThreadSnackBar(
+        SnackBar(
+          content: Text('Could not update poll', style: GoogleFonts.ptSans()),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   void _cancelEditingMessage() {
@@ -1249,9 +1358,15 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     );
   }
 
-  void _showReactionDetailsSheet(_UiMsg msg, ChatContact peer) {
-    showModalBottomSheet<void>(
+  Future<void> _showReactionDetailsSheet(_UiMsg msg, ChatContact peer) async {
+    if (!mounted) return;
+    _removeReactionOverlayEntryOnly();
+    // Let any competing gesture/overlay settle before opening the sheet.
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
       context: context,
+      useRootNavigator: true,
       isScrollControlled: true,
       backgroundColor: _ChatThreadColors.composerBar,
       shape: const RoundedRectangleBorder(
@@ -1260,9 +1375,11 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       builder: (ctx) => _ReactionDetailsSheet(
         msg: msg,
         myId: _myId,
-        peerDisplayName: peer.name.trim().isNotEmpty
-            ? peer.name.trim()
-            : peer.email,
+        nameForUserId: (userId) => _reactionUserName(
+          userId: userId,
+          msg: msg,
+          peer: peer,
+        ),
         onRemoveMine: () {
           Navigator.pop(ctx);
           unawaited(_setMessageReaction(msg.id, ''));
@@ -1276,6 +1393,26 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         },
       ),
     );
+  }
+
+  String _reactionUserName({
+    required String userId,
+    required _UiMsg msg,
+    required ChatContact peer,
+  }) {
+    if (userId == _myId) return 'You';
+    if (msg.senderId == userId && msg.senderName.trim().isNotEmpty) {
+      return msg.senderName.trim();
+    }
+    for (final c in Get.find<ChatController>().contacts) {
+      if (!c.isGroupConversation && c.id == userId) {
+        return c.name.trim().isNotEmpty ? c.name.trim() : c.email;
+      }
+    }
+    if (!peer.isGroupConversation) {
+      return peer.name.trim().isNotEmpty ? peer.name.trim() : peer.email;
+    }
+    return 'Member';
   }
 
   /// Same as chat home [ChatScreen] when opening a thread with a friend.
@@ -1870,10 +2007,21 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     final map = nested is Map ? Map<String, dynamic>.from(nested) : root;
     final fromId =
         '${map['fromUserId'] ?? map['senderId'] ?? map['from'] ?? ''}'.trim();
-    final peerId = '${map['peerId'] ?? map['toUserId'] ?? ''}'.trim();
-    final fromMatches = fromId.isNotEmpty && fromId == widget.contact.id;
-    final targetMatchesSelf = peerId.isNotEmpty && peerId == _myId;
-    if (!fromMatches && !targetMatchesSelf) return;
+    final peerId =
+        '${map['peerId'] ?? map['toUserId'] ?? map['conversationId'] ?? map['groupId'] ?? ''}'
+            .trim();
+    final fromMatches = !_isGroupConversation &&
+        fromId.isNotEmpty &&
+        fromId == widget.contact.id;
+    final targetMatchesSelf = !_isGroupConversation &&
+        peerId.isNotEmpty &&
+        peerId == _myId;
+    final groupMatches = _isGroupConversation &&
+        peerId.isNotEmpty &&
+        peerId == _conversationId &&
+        fromId.isNotEmpty &&
+        fromId != _myId;
+    if (!fromMatches && !targetMatchesSelf && !groupMatches) return;
     final active =
         map['voiceRecording'] == true ||
         map['isRecordingVoice'] == true ||
@@ -2901,6 +3049,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     );
     _contactsEver?.dispose();
     _typingStopTimer?.cancel();
+    _socketBindRetry?.cancel();
     _peerTypingClear?.cancel();
     _peerVoiceRecordingClear?.cancel();
     _jumpHighlightTimer?.cancel();
@@ -3117,15 +3266,46 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                                 ? () => _scrollToQuotedMessage(q.messageId)
                                 : null,
                             onLongPressBubble: !msg.id.startsWith('local:')
-                                ? () => _openQuickReactions(
-                                    msg,
-                                    _anchorKeyForMessageId(msg.id),
-                                  )
+                                ? () {
+                                    final rawBody = _ForwardedPayloadParse.stripForDisplay(msg.body) ?? msg.body;
+                                    final poll = ChatPollMessage.tryParse(rawBody);
+                                    if (poll != null) return;
+                                    _openQuickReactions(
+                                      msg,
+                                      _anchorKeyForMessageId(msg.id),
+                                    );
+                                  }
                                 : null,
                             onReactionSummaryTap: msg.reactions.isEmpty
                                 ? null
                                 : () => _showReactionDetailsSheet(msg, peer),
                             onEmailTap: _onMessageEmailTap,
+                            onPollVote: (optionId) {
+                              final poll = ChatPollMessage.tryParse(msg.body);
+                              if (poll == null) return;
+                              unawaited(
+                                _voteOnPoll(
+                                  messageId: msg.id,
+                                  optionId: optionId,
+                                  poll: poll,
+                                ),
+                              );
+                            },
+                            onPollSeeVotes: () {
+                              final poll = ChatPollMessage.tryParse(msg.body);
+                              if (poll == null) return;
+                              Navigator.of(context).push<void>(
+                                MaterialPageRoute(
+                                  builder: (_) => PollResultsScreen(
+                                    poll: poll,
+                                    showEdit: _canEditPollMessage(poll),
+                                    onEdit: () async {
+                                      await _editPollMessage(msg, poll);
+                                    },
+                                  ),
+                                ),
+                              );
+                            },
                             replySenderLabelResolver: (q) =>
                                 _resolveReplySenderLabel(q, peer),
                           ),
@@ -3249,18 +3429,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             },
           ),
           titleSpacing: 0,
-          title: InkWell(
-            onTap: !_isGroupConversation
-                ? null
-                : () async {
-                    await Navigator.of(context).push<void>(
-                      MaterialPageRoute<void>(
-                        builder: (_) => GroupInfoScreen(contact: peer),
-                      ),
-                    );
-                  },
-            borderRadius: BorderRadius.circular(8),
-            child: Row(
+          title: Row(
             children: [
               Stack(
                 clipBehavior: Clip.none,
@@ -3355,6 +3524,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                     Text(
                       peer.name.isNotEmpty ? peer.name : peer.email,
                       maxLines: 1,
+                      softWrap: false,
                       overflow: TextOverflow.ellipsis,
                       style: GoogleFonts.ptSans(
                         color: Colors.white,
@@ -3365,7 +3535,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                     const SizedBox(height: 2),
                     Text(
                       _headerSubtitle(peer),
-                      maxLines: 2,
+                      maxLines: 1,
+                      softWrap: false,
                       overflow: TextOverflow.ellipsis,
                       style: GoogleFonts.ptSans(
                         color: Colors.white.withValues(alpha: 0.72),
@@ -3377,7 +3548,6 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 ),
               ),
             ],
-          ),
           ),
           actions: [
             if (_hasMessageSelection) ...[
@@ -3411,6 +3581,14 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                 onPressed: _clearMessageSelection,
               ),
             ] else ...[
+              if (peer.isGroupConversation)
+                IconButton(
+                  tooltip: 'Group info',
+                  icon: const Icon(Icons.info_outline_rounded),
+                  onPressed: () async {
+                    Get.to(() => GroupInfoScreen(contact: peer));
+                  },
+                ),
               if (!peer.isGroupConversation) ...[
                 IconButton(
                   tooltip: 'Call',
@@ -3458,7 +3636,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                       color: _ChatThreadColors.canvas,
                       child: SizedBox.expand(
                         child: Image.asset(
-                          'assets/chat.png',
+                          'assets/chat.jpeg',
                           fit: BoxFit.cover,
                           alignment: Alignment.center,
                         ),
@@ -3481,7 +3659,6 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                           duration: const Duration(milliseconds: 170),
                           curve: Curves.easeOut,
                           opacity: _showPeerActivityBubble ? 1 : 0,
-                          // Overlay keeps typing UI from changing column height.
                           child: _PeerTypingConversationBubble(
                             showVoice: _showPeerVoiceRecordingBubble,
                           ),
@@ -3528,6 +3705,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
           (Icons.videocam_rounded, 'Video', const Color(0xFFE53935)),
           (Icons.description_rounded, 'Document', const Color(0xFF7C4DFF)),
           (Icons.photo_camera_rounded, 'Camera', const Color(0xFFE91E8C)),
+          (Icons.poll_rounded, 'Poll', const Color(0xFF00A884)),
         ];
         return SafeArea(
           child: Padding(
@@ -3552,9 +3730,9 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   itemCount: items.length,
                   gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 4,
-                    mainAxisSpacing: 14,
-                    crossAxisSpacing: 10,
-                    mainAxisExtent: 108,
+                    mainAxisSpacing: 15,
+                    crossAxisSpacing: 15,
+                    mainAxisExtent: 118,
                   ),
                   itemBuilder: (context, i) {
                     final (icon, label, color) = items[i];
@@ -3573,6 +3751,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                           _openDocumentPicker();
                         } else if (i == 3) {
                           unawaited(_openCameraForChat());
+                        } else if (i == 4) {
+                          unawaited(_openCreatePoll());
                         }
                       },
                     );
@@ -3584,6 +3764,152 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
         );
       },
     );
+  }
+
+  Future<void> _openCreatePoll() async {
+    if (!mounted || _myId.isEmpty) return;
+    final result = await Navigator.of(context).push<CreatePollResult>(
+      MaterialPageRoute(builder: (_) => const CreatePollScreen()),
+    );
+    if (!mounted || result == null) return;
+    await _sendPollMessage(result);
+  }
+
+  Future<void> _sendPollMessage(CreatePollResult payload) async {
+    final clientId = _newClientId();
+    final nowUtc = DateTime.now().toUtc();
+    final options = <ChatPollOption>[];
+    for (var i = 0; i < payload.options.length; i++) {
+      options.add(
+        ChatPollOption(
+          optionId: 'opt_${i + 1}_${DateTime.now().microsecondsSinceEpoch}',
+          text: payload.options[i],
+          voteCount: 0,
+        ),
+      );
+    }
+    final poll = ChatPollMessage(
+      pollId: 'poll_${DateTime.now().microsecondsSinceEpoch}',
+      question: payload.question,
+      options: options,
+      votes: const [],
+      createdBy: _myId,
+      createdAtUtc: nowUtc,
+      endsAtUtc: payload.endsAtUtc,
+      allowMultipleAnswers: false,
+      visibleAnswers: payload.visibleAnswers,
+      status: 'active',
+    );
+    final replyQuote = _replyTarget != null ? _replyQuoteFromTarget(_replyTarget!) : null;
+    setState(() {
+      _messages.add(
+        _UiMsg(
+          id: 'local:$clientId',
+          clientId: clientId,
+          senderId: _myId,
+          body: poll.encode(),
+          createdAt: DateTime.now(),
+          outbound: OutboundDelivery.sending,
+          replyTo: replyQuote,
+          reactions: const [],
+          editedAt: null,
+        ),
+      );
+      _replyTarget = null;
+    });
+    _viewingOlderMessages = false;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scrollToLatest(animate: true);
+    });
+    try {
+      final sent = _isGroupConversation
+          ? await _repo.sendGroupMessage(
+              groupId: _conversationId,
+              body: poll.encode(),
+              clientId: clientId,
+              replyToMessageId: replyQuote?.messageId,
+            )
+          : await _repo.sendChatMessage(
+              peerId: _conversationId,
+              body: poll.encode(),
+              clientId: clientId,
+              replyToMessageId: replyQuote?.messageId,
+            );
+      if (!mounted) return;
+      setState(() => _ingestRemoteDto(sent.message));
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        final i = _messages.indexWhere((m) => m.clientId == clientId);
+        if (i >= 0) {
+          _messages[i] = _messages[i].copyWith(outbound: OutboundDelivery.failed);
+        }
+      });
+    }
+  }
+
+  Future<void> _voteOnPoll({
+    required String messageId,
+    required String optionId,
+    required ChatPollMessage poll,
+  }) async {
+    if (messageId.startsWith('local:')) return;
+    final oldVotes = List<ChatPollVote>.from(poll.votes);
+    final optimisticVotes = oldVotes.where((v) => v.userId != _myId).toList()
+      ..add(
+        ChatPollVote(
+          userId: _myId,
+          optionId: optionId,
+          votedAtUtc: DateTime.now().toUtc(),
+          userName: 'You',
+        ),
+      );
+    final optimisticOptions = poll.options
+        .map(
+          (o) => o.copyWith(
+            voteCount: optimisticVotes.where((v) => v.optionId == o.optionId).length,
+          ),
+        )
+        .toList();
+    setState(() {
+      final i = _messages.indexWhere((m) => m.id == messageId);
+      if (i < 0) return;
+      final parsed = ChatPollMessage.tryParse(_messages[i].body);
+      if (parsed == null) return;
+      _messages[i] = _messages[i].copyWith(
+        body: parsed.copyWith(votes: optimisticVotes, options: optimisticOptions).encode(),
+      );
+    });
+    try {
+      final dto = _isGroupConversation
+          ? await _repo.voteGroupPoll(
+              groupId: _conversationId,
+              messageId: messageId,
+              optionId: optionId,
+            )
+          : await _repo.voteDirectPoll(
+              peerId: _conversationId,
+              messageId: messageId,
+              optionId: optionId,
+            );
+      if (!mounted) return;
+      setState(() => _ingestRemoteDto(dto));
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        final i = _messages.indexWhere((m) => m.id == messageId);
+        if (i < 0) return;
+        final parsed = ChatPollMessage.tryParse(_messages[i].body);
+        if (parsed == null) return;
+        _messages[i] = _messages[i].copyWith(body: parsed.copyWith(votes: oldVotes).encode());
+      });
+      _showThreadSnackBar(
+        SnackBar(
+          content: Text('Could not vote right now', style: GoogleFonts.ptSans()),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   static const int _kMaxChatImages = 4;
@@ -4957,52 +5283,49 @@ class _AttachmentSheetTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              height: 72,
-              width: double.infinity,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: tileBackground,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: Colors.white.withValues(alpha: 0.06),
-                  ),
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            height: 92,
+            width: double.infinity,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: tileBackground,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.06),
                 ),
-                child: Center(child: Icon(icon, color: iconColor, size: 28)),
               ),
+              child: Center(child: Icon(icon, color: iconColor, size: 38)),
             ),
-            const SizedBox(height: 8),
-            Text(
-              label,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: GoogleFonts.ptSans(
-                color: Colors.white.withValues(alpha: 0.88),
-                fontSize: 11.5,
-                fontWeight: FontWeight.w500,
-                height: 1.15,
-              ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: GoogleFonts.ptSans(
+              color: Colors.white.withValues(alpha: 0.88),
+              fontSize: 11.5,
+              fontWeight: FontWeight.w500,
+              height: 1.15,
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 }
 
 abstract final class _ChatThreadColors {
-  static const canvas = Color(0xFF282828);
-  static const composerBar = Color(0xFF121212);
-  static const composerField = Color(0xFF3A3A3A);
+  static const canvas = Color(0xFF000000);
+  static const composerBar = Color(0xFF000000);
+  static const composerField = Color(0xFF000000);
   static const onComposer = Color(0xFFE8EAED);
   static const hintOnComposer = Color(0xFF9AA0A6);
   static const mutedOnCanvas = Color(0xFF9AA0A6);
@@ -5605,14 +5928,14 @@ class _ReactionDetailsSheet extends StatefulWidget {
   const _ReactionDetailsSheet({
     required this.msg,
     required this.myId,
-    required this.peerDisplayName,
+    required this.nameForUserId,
     required this.onRemoveMine,
     required this.onPickEmoji,
   });
 
   final _UiMsg msg;
   final String myId;
-  final String peerDisplayName;
+  final String Function(String userId) nameForUserId;
   final VoidCallback onRemoveMine;
   final VoidCallback onPickEmoji;
 
@@ -5625,7 +5948,8 @@ class _ReactionDetailsSheetState extends State<_ReactionDetailsSheet> {
 
   String _nameFor(String userId) {
     if (userId == widget.myId) return 'You';
-    return widget.peerDisplayName;
+    final v = widget.nameForUserId(userId).trim();
+    return v.isEmpty ? 'Member' : v;
   }
 
   @override
@@ -6123,10 +6447,39 @@ class _ForwardedPayloadParse {
     if (inner == body) return null;
     return inner;
   }
+
+  /// Number of stacked forwarded markers in the stored body.
+  static int forwardedCount(String body) {
+    var s = body;
+    var count = 0;
+    while (true) {
+      if (s.startsWith(textPrefix)) {
+        count++;
+        s = s.substring(textPrefix.length);
+        continue;
+      }
+      final fm = _flexForwardHeader.firstMatch(s);
+      if (fm != null && fm.start == 0) {
+        count++;
+        s = s.substring(fm.end);
+        continue;
+      }
+      final m = _legacyHeader.firstMatch(s);
+      if (m != null) {
+        count++;
+        s = s.substring(m.end);
+        continue;
+      }
+      break;
+    }
+    return count;
+  }
 }
 
 class _ForwardedBannerRow extends StatelessWidget {
-  const _ForwardedBannerRow();
+  const _ForwardedBannerRow({required this.count});
+
+  final int count;
 
   @override
   Widget build(BuildContext context) {
@@ -6146,7 +6499,7 @@ class _ForwardedBannerRow extends StatelessWidget {
             ),
           ),
           Text(
-            ' Forwarded',
+            count > 1 ? ' Forwarded ($count)' : ' Forwarded',
             style: GoogleFonts.ptSans(
               fontSize: 13,
               fontStyle: FontStyle.italic,
@@ -6360,6 +6713,8 @@ class _MessageBubble extends StatelessWidget {
     this.onOpenVideo,
     this.onOpenDocument,
     this.onIncomingVoiceFirstPlay,
+    this.onPollVote,
+    this.onPollSeeVotes,
     this.replySenderLabelResolver,
   });
 
@@ -6384,6 +6739,8 @@ class _MessageBubble extends StatelessWidget {
   final VoidCallback? onOpenVideo;
   final VoidCallback? onOpenDocument;
   final VoidCallback? onIncomingVoiceFirstPlay;
+  final ValueChanged<String>? onPollVote;
+  final VoidCallback? onPollSeeVotes;
   final String Function(ChatReplyQuote quote)? replySenderLabelResolver;
 
   static const _jumpHighlightTint = Color(0xFF7DD3FC);
@@ -6424,6 +6781,8 @@ class _MessageBubble extends StatelessWidget {
       if (c.isNotEmpty) return c;
       return img.items.length > 1 ? '${img.items.length} photos' : 'Photo';
     }
+    final poll = ChatPollMessage.tryParse(t);
+    if (poll != null) return poll.question;
     // Fallback for non-JSON map-like payload previews that may come from older rows.
     final low = t.toLowerCase();
     if (low.startsWith('{') && low.contains('t:')) {
@@ -6544,14 +6903,16 @@ class _MessageBubble extends StatelessWidget {
         ),
       ),
     );
+    final forwardedCount = _ForwardedPayloadParse.forwardedCount(msg.body);
     final bodyForRich = _ForwardedPayloadParse.stripForDisplay(msg.body);
-    final showForwardedBanner = bodyForRich != null;
+    final showForwardedBanner = forwardedCount > 0 && bodyForRich != null;
     final bodyText = bodyForRich ?? msg.body;
     final showEditedBanner = msg.editedAt != null;
     final imageEnvelope = ChatImageMessage.tryParse(bodyText);
     final videoEnvelope = ChatVideoMessage.tryParse(bodyText);
     final voiceEnvelope = ChatVoiceMessage.tryParse(bodyText);
     final docEnvelope = ChatDocumentMessage.tryParse(bodyText);
+    final pollEnvelope = ChatPollMessage.tryParse(bodyText);
     final previewUrl =
         (imageEnvelope != null ||
             videoEnvelope != null ||
@@ -6578,6 +6939,59 @@ class _MessageBubble extends StatelessWidget {
         previewUrl == null &&
         !showEditedBanner &&
         _isSingleGraphemeEmojiOnly(bodyText);
+
+    if (pollEnvelope != null && !singleEmojiLayout) {
+      final outgoingState = msg.outbound ?? OutboundDelivery.sent;
+      final metaWidget = msg.senderId == myId
+          ? Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(timeLabel, style: meta),
+                const SizedBox(width: 4),
+                if (outgoingState == OutboundDelivery.failed && onRetry != null)
+                  InkWell(
+                    onTap: onRetry,
+                    child: Text(
+                      'Retry',
+                      style: GoogleFonts.ptSans(
+                        fontSize: 12,
+                        color: const Color(0xFF7DD3FC),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  )
+                else
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 0.5),
+                    child: _OutboundTicks(state: outgoingState),
+                  ),
+              ],
+            )
+          : Text(timeLabel, style: meta);
+      return Align(
+        alignment: msg.senderId == myId ? Alignment.centerRight : Alignment.centerLeft,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 340),
+          child: Container(
+            margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+            decoration: BoxDecoration(
+              color: msg.senderId == myId
+                  ? _ChatThreadColors.outgoingBubble
+                  : _ChatThreadColors.incomingBubble,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: ChatPollCard(
+              poll: pollEnvelope,
+              currentUserId: myId,
+              onVote: (id) => onPollVote?.call(id),
+              onSeeVotes: () => onPollSeeVotes?.call(),
+              trailingMeta: metaWidget,
+            ),
+          ),
+        ),
+      );
+    }
 
     if (outgoing) {
       final st = msg.outbound ?? OutboundDelivery.sent;
@@ -6621,7 +7035,8 @@ class _MessageBubble extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       if (q != null && !q.isEmpty) _inlineReplyStrip(q),
-                      if (showForwardedBanner) const _ForwardedBannerRow(),
+                      if (showForwardedBanner)
+                        _ForwardedBannerRow(count: forwardedCount),
                       if (showEditedBanner) const _EditedBannerRow(),
                       ChatMessageDocumentBubble(
                         payload: docEnvelope,
@@ -6710,7 +7125,8 @@ class _MessageBubble extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       if (q != null && !q.isEmpty) _inlineReplyStrip(q),
-                      if (showForwardedBanner) const _ForwardedBannerRow(),
+                      if (showForwardedBanner)
+                        _ForwardedBannerRow(count: forwardedCount),
                       if (showEditedBanner) const _EditedBannerRow(),
                       ChatMessageVoiceBubble(
                         payload: voiceEnvelope,
@@ -6776,7 +7192,8 @@ class _MessageBubble extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (q != null && !q.isEmpty) _inlineReplyStrip(q),
-            if (showForwardedBanner) const _ForwardedBannerRow(),
+            if (showForwardedBanner)
+              _ForwardedBannerRow(count: forwardedCount),
             if (showEditedBanner) const _EditedBannerRow(),
           ],
         );
@@ -6864,7 +7281,8 @@ class _MessageBubble extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (q != null && !q.isEmpty) _inlineReplyStrip(q),
-            if (showForwardedBanner) const _ForwardedBannerRow(),
+            if (showForwardedBanner)
+              _ForwardedBannerRow(count: forwardedCount),
             if (showEditedBanner) const _EditedBannerRow(),
           ],
         );
@@ -7082,7 +7500,8 @@ class _MessageBubble extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         if (q != null && !q.isEmpty) _inlineReplyStrip(q),
-                        if (showForwardedBanner) const _ForwardedBannerRow(),
+                        if (showForwardedBanner)
+                          _ForwardedBannerRow(count: forwardedCount),
                         if (showEditedBanner) const _EditedBannerRow(),
                         if (previewUrl != null)
                           Padding(
@@ -7219,7 +7638,8 @@ class _MessageBubble extends StatelessWidget {
                   children: [
                     if (isGroupConversation) groupSenderInlineLabel,
                     if (q != null && !q.isEmpty) _inlineReplyStrip(q),
-                    if (showForwardedBanner) const _ForwardedBannerRow(),
+                    if (showForwardedBanner)
+                      _ForwardedBannerRow(count: forwardedCount),
                     if (showEditedBanner) const _EditedBannerRow(),
                     ChatMessageDocumentBubble(
                       payload: docEnvelope,
@@ -7275,7 +7695,8 @@ class _MessageBubble extends StatelessWidget {
                   children: [
                     if (isGroupConversation) groupSenderInlineLabel,
                     if (q != null && !q.isEmpty) _inlineReplyStrip(q),
-                    if (showForwardedBanner) const _ForwardedBannerRow(),
+                    if (showForwardedBanner)
+                      _ForwardedBannerRow(count: forwardedCount),
                     if (showEditedBanner) const _EditedBannerRow(),
                     ChatMessageVoiceBubble(
                       payload: voiceEnvelope,
@@ -7299,7 +7720,8 @@ class _MessageBubble extends StatelessWidget {
         children: [
           if (isGroupConversation) groupSenderInlineLabel,
           if (q != null && !q.isEmpty) _inlineReplyStrip(q),
-          if (showForwardedBanner) const _ForwardedBannerRow(),
+          if (showForwardedBanner)
+            _ForwardedBannerRow(count: forwardedCount),
           if (showEditedBanner) const _EditedBannerRow(),
         ],
       );
@@ -7360,7 +7782,8 @@ class _MessageBubble extends StatelessWidget {
         children: [
           if (isGroupConversation) groupSenderInlineLabel,
           if (q != null && !q.isEmpty) _inlineReplyStrip(q),
-          if (showForwardedBanner) const _ForwardedBannerRow(),
+          if (showForwardedBanner)
+            _ForwardedBannerRow(count: forwardedCount),
           if (showEditedBanner) const _EditedBannerRow(),
         ],
       );
@@ -7527,7 +7950,8 @@ class _MessageBubble extends StatelessWidget {
                     children: [
                     if (isGroupConversation) groupSenderInlineLabel,
                       if (q != null && !q.isEmpty) _inlineReplyStrip(q),
-                      if (showForwardedBanner) const _ForwardedBannerRow(),
+                      if (showForwardedBanner)
+                        _ForwardedBannerRow(count: forwardedCount),
                       if (showEditedBanner) const _EditedBannerRow(),
                       if (previewUrl != null)
                         Padding(
@@ -7854,9 +8278,9 @@ class _ThreadComposerState extends State<_ThreadComposer> {
         }
       },
       child: Material(
-        color: _ChatThreadColors.composerBar,
-        elevation: 8,
-        shadowColor: Colors.black.withValues(alpha: 0.35),
+        color: Colors.transparent,
+        elevation: 0,
+        shadowColor: Colors.transparent,
         child: SafeArea(
           top: false,
           child: Padding(

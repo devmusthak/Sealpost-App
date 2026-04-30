@@ -1,5 +1,6 @@
 import 'chat_contact.dart';
 import 'chat_image_message.dart';
+import 'chat_poll_message.dart';
 
 /// Same prefixes as [chat_thread_view] `_ForwardedPayloadParse` (wire format).
 const _kForwardPrefix = '» Forwarded\n\n';
@@ -78,6 +79,10 @@ String chatListLastMessagePreview(String raw) {
     final doc = ChatDocumentMessage.tryParse(p);
     if (doc != null) {
       return doc.isPdf ? 'PDF' : 'Document';
+    }
+    final poll = ChatPollMessage.tryParse(p);
+    if (poll != null) {
+      return _truncate(poll.question, 160);
     }
     if (p.startsWith('{') && p.contains('"t"')) {
       return 'Attachment';

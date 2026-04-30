@@ -27,6 +27,7 @@ class _GroupInvitePreviewWidgetState extends State<GroupInvitePreviewWidget> {
   Map<String, dynamic>? _info;
   bool _busy = false;
   bool _joining = false;
+  static const _actionGreen = Color(0xFF25D366);
 
   @override
   void initState() {
@@ -113,49 +114,114 @@ class _GroupInvitePreviewWidgetState extends State<GroupInvitePreviewWidget> {
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: Colors.white12),
       ),
-      padding: const EdgeInsets.all(10),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          CircleAvatar(
-            radius: 24,
-            backgroundColor: const Color(0xFF2A2B2C),
-            backgroundImage: image.isNotEmpty ? NetworkImage(image) : null,
-            child: image.isEmpty ? const Icon(Icons.groups_2_rounded, color: Colors.white) : null,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
+            child: Row(
               children: [
-                Text(
-                  name.isNotEmpty ? name : 'Group invite',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: GoogleFonts.ptSans(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: const Color(0xFF2A2B2C),
+                  backgroundImage: image.isNotEmpty ? NetworkImage(image) : null,
+                  child: image.isEmpty
+                      ? const Icon(Icons.groups_2_rounded, color: Colors.white)
+                      : null,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        name.isNotEmpty ? name : 'Group invite',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.ptSans(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        count.isNotEmpty ? '$count members' : 'Invite to group',
+                        style: GoogleFonts.ptSans(color: Colors.white60, fontSize: 12),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  count.isNotEmpty ? '$count members' : 'Invite to group',
-                  style: GoogleFonts.ptSans(color: Colors.white60, fontSize: 12),
-                ),
+                if (alreadyJoined) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.check_circle_rounded,
+                          size: 15,
+                          color: Color(0xFFB6F7D1),
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          'Joined',
+                          style: GoogleFonts.ptSans(
+                            color: Colors.white,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
-          const SizedBox(width: 8),
-          FilledButton(
-            onPressed: alreadyJoined || _joining ? null : _join,
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF25D366),
-              foregroundColor: Colors.black,
-              minimumSize: const Size(62, 34),
+          if (!alreadyJoined) ...[
+            Divider(
+              height: 1,
+              thickness: 1,
+              color: Colors.white.withValues(alpha: 0.14),
             ),
-            child: Text(alreadyJoined ? 'Joined' : (_joining ? '...' : 'Join')),
-          ),
+            InkWell(
+              onTap: _joining ? null : _join,
+              splashColor: _actionGreen.withValues(alpha: 0.12),
+              highlightColor: Colors.transparent,
+              child: SizedBox(
+                height: 48,
+                child: Center(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.open_in_new_rounded,
+                        color: _actionGreen,
+                        size: 22,
+                      ),
+                      const SizedBox(width: 9),
+                      Text(
+                        _joining ? 'Joining...' : 'Join group',
+                        style: GoogleFonts.ptSans(
+                          color: _actionGreen,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 17,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

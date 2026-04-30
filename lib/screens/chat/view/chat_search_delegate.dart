@@ -27,9 +27,9 @@ class ChatSearchDelegate extends SearchDelegate<ChatUser?> {
   ThemeData appBarTheme(BuildContext context) {
     final base = Theme.of(context);
     return base.copyWith(
-      scaffoldBackgroundColor: const Color(0xFF121212),
+      scaffoldBackgroundColor: const Color(0xFF000000),
       appBarTheme: const AppBarTheme(
-        backgroundColor: Color(0xFF202124),
+        backgroundColor: Color(0xFF000000),
         foregroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
       ),

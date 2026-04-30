@@ -51,7 +51,4 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/splash-bg.svg
-    - assets/logo.svg
-    - assets/head-login.svg
-    - assets/chat.png
+    - assets/

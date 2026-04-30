@@ -17,9 +17,12 @@ import '../../../data/mail/mail_address.dart';
 import '../../../data/mail/mail_attachment.dart';
 import '../../../data/mail/mail_detail.dart';
 import '../../../data/mail/mail_list_item.dart';
+import '../../../data/chat/chat_contact.dart';
+import '../../../data/chat/chat_repository.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/delete_mail_confirmation_dialog.dart';
 import '../../../widgets/linkable_selectable_text.dart';
+import '../../chat/chat_open_thread.dart';
 import '../../compose/view/compose_view.dart';
 import '../controller/mail_detail_controller.dart';
 
@@ -115,6 +118,108 @@ class _MailDetailScreenState extends State<MailDetailScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _onEmailTapFromMailBody(String email) async {
+    final target = email.trim().toLowerCase();
+    if (target.isEmpty) return;
+    final auth = Get.find<AuthRepository>();
+    final myEmail = auth.session?.email.trim().toLowerCase() ?? '';
+    if (target == myEmail) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "It's your email",
+            style: GoogleFonts.ptSans(fontSize: 14),
+          ),
+        ),
+      );
+      return;
+    }
+
+    try {
+      final users = await Get.find<ChatRepository>().searchUsersByEmail(target);
+      final match = users.firstWhereOrNull(
+        (u) => u.email.trim().toLowerCase() == target,
+      );
+      if (!mounted) return;
+      if (match == null) {
+        await Get.to<void>(
+          () => ComposeScreen(
+            prefill: ComposePrefill(
+              toAddresses: [email.trim()],
+              subject: '',
+              body: '',
+            ),
+          ),
+        );
+        return;
+      }
+
+      await showModalBottomSheet<void>(
+        context: context,
+        backgroundColor: const Color(0xFF000000),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (ctx) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.chat_bubble_outline_rounded, color: Colors.white),
+                title: const Text('Open chat', style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  final contact = ChatContact(
+                    id: match.id,
+                    name: match.name.isNotEmpty ? match.name : match.email,
+                    email: match.email,
+                    isOnline: match.isOnline,
+                    lastSeenAt: null,
+                    relationStatus: match.relationStatus,
+                    lastMessage: '',
+                    timeLabel: '',
+                    unreadCount: 0,
+                  );
+                  openChatThread(context, contact);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.mail_outline_rounded, color: Colors.white),
+                title: const Text('Compose email', style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  unawaited(
+                    Get.to<void>(
+                      () => ComposeScreen(
+                        prefill: ComposePrefill(
+                          toAddresses: [email.trim()],
+                          subject: '',
+                          body: '',
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      await Get.to<void>(
+        () => ComposeScreen(
+          prefill: ComposePrefill(
+            toAddresses: [email.trim()],
+            subject: '',
+            body: '',
+          ),
+        ),
+      );
+    }
   }
 
   List<String> _replyRecipientEmails(MailDetail? d, MailListItem p) {
@@ -481,6 +586,7 @@ class _MailDetailScreenState extends State<MailDetailScreen> {
                                             fontSize: 15,
                                             height: 1.5,
                                           ),
+                                          onEmailTap: _onEmailTapFromMailBody,
                                         ),
                             ),
                             if (d != null && d.attachments.isNotEmpty) ...[

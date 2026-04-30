@@ -209,9 +209,9 @@ class _GroupInfoScreenState extends State<GroupInfoScreen> {
         .trim();
     final initial = title.isEmpty ? '?' : title.substring(0, 1).toUpperCase();
     return Scaffold(
-      backgroundColor: const Color(0xFF121212),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF202124),
+        backgroundColor: const Color(0xFF000000),
         foregroundColor: Colors.white,
         title: const Text('Group info'),
         actions: [
@@ -397,7 +397,7 @@ class _GroupAddMembersSearchDelegate extends SearchDelegate<bool> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF1E1F20),
+          backgroundColor: const Color(0xFF000000),
           title: const Text('Add member', style: TextStyle(color: Colors.white)),
           content: Text(
             'Are you sure to add this person to group?\n\n$title',
@@ -490,9 +490,9 @@ class _GroupAddMembersSearchDelegate extends SearchDelegate<bool> {
   ThemeData appBarTheme(BuildContext context) {
     final base = Theme.of(context);
     return base.copyWith(
-      scaffoldBackgroundColor: const Color(0xFF121212),
+      scaffoldBackgroundColor: const Color(0xFF000000),
       appBarTheme: const AppBarTheme(
-        backgroundColor: Color(0xFF202124),
+        backgroundColor: Color(0xFF000000),
         foregroundColor: Colors.white,
       ),
       inputDecorationTheme: const InputDecorationTheme(
