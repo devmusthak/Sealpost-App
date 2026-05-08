@@ -1,6 +1,11 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import '../../../core/call/incoming_call_kit_coordinator.dart';
+import '../../../core/push/push_notification_service.dart';
 import '../../../core/share/share_receive_service.dart';
 import '../../chat/controller/chat_controller.dart';
 import '../../chat/view/chat_view.dart';
@@ -14,7 +19,8 @@ class MainNavigationScreen extends StatefulWidget {
   State<MainNavigationScreen> createState() => _MainNavigationScreenState();
 }
 
-class _MainNavigationScreenState extends State<MainNavigationScreen> {
+class _MainNavigationScreenState extends State<MainNavigationScreen>
+    with WidgetsBindingObserver {
   int _selectedIndex = 0;
     static const _navBackground = Color(0xFF121212);
 
@@ -24,10 +30,19 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   ];
 
   Worker? _shareTabWorker;
+  Timer? _acceptedSyncTimer;
+  bool _acceptedSyncInFlight = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // iOS stability: defer push/callkit listener bootstrap until main navigation
+      // is mounted and app services are ready.
+      unawaited(PushNotificationService.requestPermissionAndSetupListeners());
+      _scheduleAcceptedCallSync();
+    });
     if (Get.isRegistered<ShareReceiveService>()) {
       final s = Get.find<ShareReceiveService>();
       final initial = s.pending.value;
@@ -44,8 +59,33 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _acceptedSyncTimer?.cancel();
     _shareTabWorker?.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _scheduleAcceptedCallSync();
+    }
+  }
+
+  void _scheduleAcceptedCallSync() {
+    if (!Platform.isIOS) return;
+    if (_acceptedSyncInFlight) return;
+    _acceptedSyncTimer?.cancel();
+    _acceptedSyncTimer = Timer(const Duration(milliseconds: 900), () async {
+      _acceptedSyncInFlight = true;
+      try {
+        await IncomingCallKitCoordinator.syncAcceptedCallFromNativeIfNeeded();
+      } catch (_) {
+        // Safety net only: ignore to avoid taking down app startup.
+      } finally {
+        _acceptedSyncInFlight = false;
+      }
+    });
   }
 
   @override

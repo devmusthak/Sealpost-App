@@ -10,6 +10,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'core/call/agora_call_service.dart';
 import 'core/mailto/mailto_link_service.dart';
 import 'core/share/share_receive_service.dart';
+import 'core/push/pending_voice_call.dart';
 import 'core/push/push_notification_service.dart';
 import 'core/network/auth_interceptor.dart';
 import 'core/network/dio_client.dart';
@@ -29,9 +30,13 @@ import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  runApp(const SealpostApp());
+}
+
+Future<void> _bootstrapApp() async {
   final sessionStorage = await SessionStorage.create();
   final dio = createDio();
   dio.interceptors.add(AuthInterceptor());
@@ -43,26 +48,20 @@ Future<void> main() async {
   );
   final accountManager = await AccountSessionManager().init();
   Get.put<AccountSessionManager>(accountManager, permanent: true);
-  Get.put<MailRepository>(
-    MailRepository(Get.find<Dio>()),
-    permanent: true,
-  );
+  Get.put<MailRepository>(MailRepository(Get.find<Dio>()), permanent: true);
   Get.put<ChatRepository>(ChatRepository(Get.find<Dio>()), permanent: true);
   Get.put<ChatMediaRepository>(
     ChatMediaRepository(Get.find<Dio>()),
     permanent: true,
   );
-  Get.put<ChatController>(ChatController(), permanent: true);
+  Get.lazyPut<ChatController>(() => ChatController(), fenix: true);
   Get.put<ChatForwardOpener>(ChatForwardOpenerImpl(), permanent: true);
   Get.put<AgoraCallService>(AgoraCallService(), permanent: true);
-  Get.put(
-    MailtoLinkService(Get.find<SessionStorage>()),
-    permanent: true,
-  );
+  Get.put(MailtoLinkService(Get.find<SessionStorage>()), permanent: true);
   Get.put(ShareReceiveService(), permanent: true);
   Get.put(PendingMailNotification(), permanent: true);
   Get.put(PendingChatNotification(), permanent: true);
-  runApp(const SealpostApp());
+  Get.put(PendingVoiceCall(), permanent: true);
 }
 
 class SealpostApp extends StatefulWidget {
@@ -75,26 +74,66 @@ class SealpostApp extends StatefulWidget {
 class _SealpostAppState extends State<SealpostApp> with WidgetsBindingObserver {
   StreamSubscription<Uri>? _appLinkSub;
   Timer? _presenceHeartbeat;
+  Timer? _presenceBackgroundSyncTimer;
   bool _presenceForeground = false;
+
+  bool _appReady = false;
+  Object? _bootstrapError;
+  bool _servicesAttached = false;
+
+  void _fireAndForget(Future<void> future) {
+    unawaited(
+      future.catchError((Object e, StackTrace st) {
+        assert(() {
+          FlutterError.reportError(FlutterErrorDetails(exception: e, stack: st));
+          return true;
+        }());
+      }),
+    );
+  }
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    unawaited(_initAppLinks());
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    _fireAndForget(_runBootstrap());
+  }
+
+  Future<void> _runBootstrap() async {
+    try {
+      await _bootstrapApp();
       if (!mounted) return;
-      _syncPresenceFromLifecycle();
-    });
+      setState(() => _appReady = true);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _servicesAttached) return;
+        _servicesAttached = true;
+        WidgetsBinding.instance.addObserver(this);
+        _fireAndForget(_initAppLinks());
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _syncPresenceFromLifecycle();
+        });
+      });
+    } catch (e, st) {
+      assert(() {
+        FlutterError.reportError(FlutterErrorDetails(exception: e, stack: st));
+        return true;
+      }());
+      if (mounted) {
+        setState(() => _bootstrapError = e);
+      }
+    }
   }
 
   void _goPresenceForeground() {
     if (_presenceForeground) return;
     _presenceForeground = true;
-    unawaited(_updatePresence(online: true));
+    _presenceBackgroundSyncTimer?.cancel();
+    _presenceBackgroundSyncTimer = null;
+    _fireAndForget(_updatePresence(online: true));
     _presenceHeartbeat?.cancel();
     _presenceHeartbeat = Timer.periodic(const Duration(seconds: 35), (_) {
-      if (_presenceForeground) unawaited(_updatePresence(online: true));
+      if (_presenceForeground) {
+        _fireAndForget(_updatePresence(online: true));
+      }
     });
   }
 
@@ -103,7 +142,14 @@ class _SealpostAppState extends State<SealpostApp> with WidgetsBindingObserver {
     _presenceForeground = false;
     _presenceHeartbeat?.cancel();
     _presenceHeartbeat = null;
-    unawaited(_updatePresence(online: false));
+    // iOS can terminate apps that do active network work during background
+    // transition. Delay and cancel if user resumes quickly.
+    _presenceBackgroundSyncTimer?.cancel();
+    _presenceBackgroundSyncTimer = Timer(const Duration(seconds: 2), () {
+      if (!_presenceForeground) {
+        _fireAndForget(_updatePresence(online: false));
+      }
+    });
   }
 
   void _syncPresenceFromLifecycle() {
@@ -158,19 +204,30 @@ class _SealpostAppState extends State<SealpostApp> with WidgetsBindingObserver {
     } catch (_) {
       /* cold start link optional */
     }
-    _appLinkSub = appLinks.uriLinkStream.listen((uri) {
-      Get.find<MailtoLinkService>().ingestUri(uri, fromExternalTap: true);
-    });
+    _appLinkSub = appLinks.uriLinkStream.listen(
+      (uri) {
+        Get.find<MailtoLinkService>().ingestUri(uri, fromExternalTap: true);
+      },
+      onError: (Object e, StackTrace st) {
+        assert(() {
+          FlutterError.reportError(FlutterErrorDetails(exception: e, stack: st));
+          return true;
+        }());
+      },
+    );
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
+    if (_servicesAttached) {
+      WidgetsBinding.instance.removeObserver(this);
+    }
     _presenceHeartbeat?.cancel();
-    unawaited(_updatePresence(online: false));
+    _presenceBackgroundSyncTimer?.cancel();
+    _presenceBackgroundSyncTimer = null;
     final sub = _appLinkSub;
     if (sub != null) {
-      unawaited(sub.cancel());
+      _fireAndForget(sub.cancel());
     }
     super.dispose();
   }
@@ -182,6 +239,29 @@ class _SealpostAppState extends State<SealpostApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    if (_bootstrapError != null) {
+      return MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: Scaffold(
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                'Could not start the app.\n$_bootstrapError',
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    if (!_appReady) {
+      return const MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: Scaffold(body: Center(child: CircularProgressIndicator())),
+      );
+    }
+
     final colorScheme = ColorScheme.fromSeed(
       seedColor: kPrimaryBlue,
       brightness: Brightness.light,

@@ -50,19 +50,20 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyAkll9cYxvVny6_cZXwr5kDhJo7vKFXwnI',
-    appId: '1:1001170799306:android:cce60e9f98349cbce04233',
-    messagingSenderId: '1001170799306',
-    projectId: 'sealpost',
-    storageBucket: 'sealpost.firebasestorage.app',
+    apiKey: 'AIzaSyC0coUFOTjQk8SmmwQIwg3sEUO5jGV0o3o',
+    appId: '1:738598128129:android:ba1865a8aade912ec20e00',
+    messagingSenderId: '738598128129',
+    projectId: 'sealpostmail',
+    storageBucket: 'sealpostmail.firebasestorage.app',
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyAyTlEHgNmdKNFacQG_GZHg0F5Egf0q0JA',
-    appId: '1:1001170799306:ios:5bccd9b44e7f5535e04233',
-    messagingSenderId: '1001170799306',
-    projectId: 'sealpost',
-    storageBucket: 'sealpost.firebasestorage.app',
+    apiKey: 'AIzaSyCb1lsSQ0VtVp1iHVPV852Ol_vMjMaxthM',
+    appId: '1:738598128129:ios:e5922d6b3d1b6ef0c20e00',
+    messagingSenderId: '738598128129',
+    projectId: 'sealpostmail',
+    storageBucket: 'sealpostmail.firebasestorage.app',
     iosBundleId: 'com.sealpost.mail',
   );
+
 }

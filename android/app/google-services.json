@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "1001170799306",
-    "project_id": "sealpost",
-    "storage_bucket": "sealpost.firebasestorage.app"
+    "project_number": "738598128129",
+    "project_id": "sealpostmail",
+    "storage_bucket": "sealpostmail.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:1001170799306:android:cce60e9f98349cbce04233",
+        "mobilesdk_app_id": "1:738598128129:android:ba1865a8aade912ec20e00",
         "android_client_info": {
           "package_name": "com.sealpost.mail"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyAkll9cYxvVny6_cZXwr5kDhJo7vKFXwnI"
+          "current_key": "AIzaSyC0coUFOTjQk8SmmwQIwg3sEUO5jGV0o3o"
         }
       ],
       "services": {

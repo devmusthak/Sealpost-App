@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:skeletonizer/skeletonizer.dart';
@@ -48,6 +47,7 @@ class _HomeScreenState extends State<HomeScreen> {
       unawaited(PushNotificationService.syncFcmTokenToServer());
       PushNotificationService.tryNavigateToMailDetail();
       PushNotificationService.tryNavigateToChatThread();
+      PushNotificationService.tryNavigateToIncomingCall();
     });
   }
 
@@ -97,8 +97,8 @@ class _HomeScreenState extends State<HomeScreen> {
         body: Stack(
           fit: StackFit.expand,
           children: [
-            SvgPicture.asset(
-              'assets/head-login.svg',
+            Image.asset(
+              'assets/chat.jpeg',
               fit: BoxFit.cover,
               alignment: Alignment.topCenter,
             ),

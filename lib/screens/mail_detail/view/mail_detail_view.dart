@@ -69,7 +69,9 @@ class _MailDetailScreenState extends State<MailDetailScreen> {
 
   @override
   void dispose() {
-    Get.delete<MailDetailController>();
+    if (Get.isRegistered<MailDetailController>()) {
+      Get.delete<MailDetailController>();
+    }
     super.dispose();
   }
 
@@ -369,8 +371,8 @@ class _MailDetailScreenState extends State<MailDetailScreen> {
         body: Stack(
           fit: StackFit.expand,
           children: [
-            SvgPicture.asset(
-              'assets/head-login.svg',
+            Image.asset(
+              'assets/chat.jpeg',
               fit: BoxFit.cover,
               alignment: Alignment.topCenter,
             ),

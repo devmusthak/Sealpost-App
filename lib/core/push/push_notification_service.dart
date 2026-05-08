@@ -8,11 +8,15 @@ import 'package:get/get.dart';
 import '../../data/auth/auth_repository.dart';
 import '../../data/chat/chat_contact.dart';
 import '../../data/mail/mail_list_item.dart';
+import '../call/incoming_call_kit_coordinator.dart';
+import '../call/incoming_call_payload.dart';
+import '../call/voice_call_navigation.dart';
 import '../../screens/chat/controller/chat_controller.dart';
 import '../../screens/chat/view/chat_thread_view.dart';
 import '../../screens/home/controller/home_controller.dart';
 import '../../screens/mail_detail/view/mail_detail_view.dart';
 import 'local_notification_service.dart';
+import 'pending_voice_call.dart';
 
 /// Holds a notification tap until [HomeScreen] is ready to navigate.
 class PendingMailNotification extends GetxController {
@@ -125,10 +129,27 @@ class PushNotificationService {
     if (defaultTargetPlatform == TargetPlatform.iOS ||
         defaultTargetPlatform == TargetPlatform.macOS) {
       await _fm.setForegroundNotificationPresentationOptions(
+        // Foreground alerts must be enabled for iOS normal chat/mail pushes.
+        // CallKit/VoIP call flow is handled separately.
         alert: true,
         badge: true,
         sound: true,
       );
+    }
+
+    // iOS-only debug telemetry for troubleshooting normal push flow.
+    if (defaultTargetPlatform == TargetPlatform.iOS && kDebugMode) {
+      final settings = await _fm.getNotificationSettings();
+      debugPrint(
+        '[fcm-ios] notification settings: '
+        'authorized=${settings.authorizationStatus} alert=${settings.alert} sound=${settings.sound} badge=${settings.badge}',
+      );
+      try {
+        final apnsToken = await _fm.getAPNSToken();
+        debugPrint('[fcm-ios] apns token: ${(apnsToken ?? '').trim()}');
+      } catch (e) {
+        debugPrint('[fcm-ios] apns token read failed: $e');
+      }
     }
 
     await LocalNotificationService.init(
@@ -140,51 +161,88 @@ class PushNotificationService {
         Get.find<PendingChatNotification>().applyFromData(data);
         tryNavigateToChatThread();
       },
+      onVoiceCallNotificationTap: (data) {
+        Get.find<PendingVoiceCall>().applyFromData(data);
+        openPendingIncomingVoiceCallIfReady();
+      },
     );
     await LocalNotificationService.consumeLaunchNotification();
+
+    IncomingCallKitCoordinator.attachListeners();
+    unawaited(IncomingCallKitCoordinator.requestAndroidCallPermissions());
 
     if (_listenersReady) return;
     _listenersReady = true;
 
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      final isIos = defaultTargetPlatform == TargetPlatform.iOS;
       if (kDebugMode) {
         debugPrint('[fcm] foreground ${message.notification?.title}');
       }
-      // Android: FCM does not show a heads-up while app is open; use local notifs.
-      // iOS/macOS: [setForegroundNotificationPresentationOptions] shows the system banner.
-      if (defaultTargetPlatform == TargetPlatform.android) {
-        final d = message.data;
-        if (d['type'] == 'new_chat_message') {
-          final groupId = '${d['groupId'] ?? ''}'.trim();
-          final isGroup =
-              '${d['isGroupConversation'] ?? ''}'.trim().toLowerCase() ==
-                  'true' ||
-              groupId.isNotEmpty;
-          final conversationId = isGroup
-              ? groupId
-              : '${d['fromUserId'] ?? d['peerId'] ?? ''}'.trim();
-          if (conversationId.isNotEmpty &&
-              Get.isRegistered<ChatController>() &&
-              Get.find<ChatController>().openConversationPeerId ==
-                  conversationId) {
-            unawaited(
-              LocalNotificationService.clearChatNotificationsForPeer(
-                conversationId,
-              ),
-            );
-            return;
-          }
-        }
-        unawaited(
-          LocalNotificationService.showForegroundRemoteMessage(message),
+      final d = Map<String, String>.from(
+        message.data.map((k, v) => MapEntry(k, '$v')),
+      );
+      final isCallEnded = IncomingCallPayload.isVoiceCallEnded(d);
+      final isIncomingCall = IncomingCallPayload.isIncomingAudioCall(d);
+
+      if (isIos && kDebugMode) {
+        debugPrint(
+          "[fcm-ios] onMessage type=${d['type'] ?? ''} notificationType=${d['notificationType'] ?? ''} "
+          "filter: isCallEnded=$isCallEnded isIncomingCall=$isIncomingCall",
         );
       }
+
+      if (isCallEnded) {
+        final id = (d['callId'] ?? '').trim();
+        if (id.isNotEmpty) {
+          unawaited(IncomingCallKitCoordinator.dismissForCallId(id));
+          unawaited(LocalNotificationService.cancelIncomingCallNotification(id));
+        }
+        return;
+      }
+      if (isIncomingCall) {
+        unawaited(IncomingCallKitCoordinator.presentFromFcmData(d));
+        return;
+      }
+      if (d['type'] == 'new_chat_message') {
+        final groupId = (d['groupId'] ?? '').trim();
+        final isGroup =
+            (d['isGroupConversation'] ?? '').trim().toLowerCase() == 'true' ||
+            groupId.isNotEmpty;
+        final conversationId = isGroup
+            ? groupId
+            : (d['fromUserId'] ?? d['peerId'] ?? '').trim();
+        // Temporary rollback for iOS: do not suppress foreground chat banners
+        // based on active chat matching.
+        final shouldSuppressSameChat = !isIos &&
+            conversationId.isNotEmpty &&
+            Get.isRegistered<ChatController>() &&
+            Get.find<ChatController>().openConversationPeerId ==
+                conversationId;
+        if (shouldSuppressSameChat) {
+          unawaited(
+            LocalNotificationService.clearChatNotificationsForPeer(
+              conversationId,
+            ),
+          );
+          return;
+        }
+      }
+      unawaited(LocalNotificationService.showForegroundRemoteMessage(message));
     });
 
     FirebaseMessaging.onMessageOpenedApp.listen(_handleMessageOpened);
 
     final initial = await _fm.getInitialMessage();
     if (initial != null) {
+      if (defaultTargetPlatform == TargetPlatform.iOS && kDebugMode) {
+        final d = Map<String, String>.from(
+          initial.data.map((k, v) => MapEntry(k, '$v')),
+        );
+        debugPrint(
+          "[fcm-ios] getInitialMessage type=${d['type'] ?? ''} notificationType=${d['notificationType'] ?? ''}",
+        );
+      }
       _handleMessageOpened(initial);
     }
   }
@@ -193,6 +251,26 @@ class PushNotificationService {
     final d = Map<String, String>.from(
       message.data.map((k, v) => MapEntry(k, '$v')),
     );
+    if (defaultTargetPlatform == TargetPlatform.iOS && kDebugMode) {
+      debugPrint(
+        "[fcm-ios] onMessageOpenedApp type=${d['type'] ?? ''} notificationType=${d['notificationType'] ?? ''}",
+      );
+    }
+    if (IncomingCallPayload.isVoiceCallEnded(d)) {
+      final id = (d['callId'] ?? '').trim();
+      if (id.isNotEmpty) {
+        unawaited(IncomingCallKitCoordinator.dismissForCallId(id));
+        unawaited(LocalNotificationService.cancelIncomingCallNotification(id));
+      }
+      return;
+    }
+    if (IncomingCallPayload.isIncomingAudioCall(d)) {
+      Get.find<PendingVoiceCall>().applyFromData(
+        IncomingCallPayload.normalizeInviteStrings(d),
+      );
+      openPendingIncomingVoiceCallIfReady();
+      return;
+    }
     if (d['type'] == 'new_chat_message') {
       Get.find<PendingChatNotification>().setFromMessage(message);
       tryNavigateToChatThread();
@@ -209,13 +287,35 @@ class PushNotificationService {
     if (auth.accessToken == null || auth.accessToken!.isEmpty) return;
 
     try {
+      if (defaultTargetPlatform == TargetPlatform.iOS && kDebugMode) {
+        try {
+          final apns = (await _fm.getAPNSToken())?.trim() ?? '';
+          debugPrint('[fcm-ios] APNs token before fcm sync: $apns');
+          if (apns.isEmpty) {
+            // Some iOS devices may provide APNs token slightly after first launch.
+            await Future<void>.delayed(const Duration(seconds: 1));
+            final apns2 = (await _fm.getAPNSToken())?.trim() ?? '';
+            debugPrint('[fcm-ios] APNs token after retry: $apns2');
+          }
+        } catch (e) {
+          debugPrint('[fcm-ios] APNs token read failed: $e');
+        }
+      }
+
       final token = await _fm.getToken();
       if (token != null && token.isNotEmpty) {
+        if (defaultTargetPlatform == TargetPlatform.iOS && kDebugMode) {
+          debugPrint('[fcm-ios] FCM token: ${token.trim()}');
+        }
         await auth.registerFcmToken(token);
       }
+      unawaited(IncomingCallKitCoordinator.syncVoipTokenToServer());
       if (!_tokenRefreshHooked) {
         _tokenRefreshHooked = true;
         _fm.onTokenRefresh.listen((t) {
+          if (defaultTargetPlatform == TargetPlatform.iOS && kDebugMode) {
+            debugPrint('[fcm-ios] FCM token refreshed: ${t.trim()}');
+          }
           unawaited(auth.registerFcmToken(t));
         });
       }
@@ -259,6 +359,11 @@ class PushNotificationService {
     Get.to<void>(
       () => MailDetailScreen(mailId: id, preview: preview, folderKey: folder),
     );
+  }
+
+  /// Opens the Agora voice UI when user taps an incoming-call notification / Accept.
+  static void tryNavigateToIncomingCall() {
+    openPendingIncomingVoiceCallIfReady();
   }
 
   /// Call from [HomeScreen] after [HomeController] exists (same timing as mail).

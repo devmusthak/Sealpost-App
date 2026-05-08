@@ -6,7 +6,7 @@ abstract final class ApiEndpoints {
       return fromEnv.endsWith('/') ? fromEnv : '$fromEnv/';
     }
     return 'https://mail.livera.ae/';
-    // return 'http://192.168.1.12:4999/';
+    // return 'http://192.168.1.6:4999/';
   }
 
   static const String health = '/health';
@@ -15,6 +15,7 @@ abstract final class ApiEndpoints {
   static const String login = '$authPrefix/login';
   static const String register = '$authPrefix/register';
   static const String fcmToken = '$authPrefix/fcm-token';
+  static const String voipToken = '$authPrefix/voip-token';
   static const String presence = '$authPrefix/presence';
   static const String userSearch = '$authPrefix/users/search';
 
@@ -37,6 +38,10 @@ abstract final class ApiEndpoints {
   static const String chatGroups = '$chatPrefix/groups';
   static const String agoraRtcToken = '$chatPrefix/call/agora-token';
   static const String agoraCallInvite = '$chatPrefix/call/agora-invite';
+  static const String voiceCallAccept = '$chatPrefix/call/accept';
+  static const String voiceCallReject = '$chatPrefix/call/reject';
+  static const String voiceCallEnd = '$chatPrefix/call/end';
+  static const String voiceCallStatus = '$chatPrefix/call/status';
   static const String chatGroupInvites = '$chatGroups/invites';
   static const String chatGroupInviteJoin = '$chatGroups/invite/join';
   static const String chatGroupMessages = '$chatGroups/messages';

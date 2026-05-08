@@ -45,6 +45,8 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>FirebaseAppDelegateProxyEnabled</key>
+	<true/>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>http</string>
@@ -54,10 +56,12 @@
 	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Sealpost needs microphone access to record voice messages in chat.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Sealpost needs camera access for video calls.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Sealpost needs local network access for voice and video calls.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Sealpost needs microphone access for voice calls and voice messages in chat.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Sealpost saves images you choose to your photo library when you tap Save.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -85,6 +89,13 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>remote-notification</string>
+		<string>voip</string>
+		<string>fetch</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:sealpost/data/auth/auth_response.dart';
 import 'package:sealpost/data/session/auth_session.dart';
 import 'package:sealpost/data/session/session_storage.dart';
@@ -175,6 +176,17 @@ class AuthRepository {
     return nextActive != null;
   }
 
+  String get _platformForPushToken {
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.iOS:
+        return 'ios';
+      case TargetPlatform.android:
+        return 'android';
+      default:
+        return 'unknown';
+    }
+  }
+
   /// Saves FCM token for push (new mail). No-op if not signed in.
   Future<void> registerFcmToken(String fcmToken) async {
     final t = fcmToken.trim();
@@ -184,7 +196,26 @@ class AuthRepository {
     try {
       await _dio.post(
         ApiEndpoints.fcmToken,
-        data: {'fcmToken': t},
+        data: {'fcmToken': t, 'platform': _platformForPushToken},
+        options: Options(
+          headers: {'Authorization': 'Bearer $bearer'},
+        ),
+      );
+    } catch (_) {
+      /* non-fatal */
+    }
+  }
+
+  /// Saves iOS PushKit VoIP token used for native CallKit incoming pushes.
+  Future<void> registerVoipToken(String voipToken) async {
+    final t = voipToken.trim();
+    if (t.isEmpty) return;
+    final bearer = accessToken;
+    if (bearer == null || bearer.isEmpty) return;
+    try {
+      await _dio.post(
+        ApiEndpoints.voipToken,
+        data: {'voipToken': t},
         options: Options(
           headers: {'Authorization': 'Bearer $bearer'},
         ),

@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 
-import '../../../core/push/push_notification_service.dart';
 import '../../../theme/app_theme.dart';
 import '../controller/splash_controller.dart';
 import '../model/splash_constants.dart';
@@ -49,10 +48,6 @@ class _SplashScreenState extends State<SplashScreen>
 
     _anim.forward();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(PushNotificationService.requestPermissionAndSetupListeners());
-    });
-
     Future<void>.delayed(SplashConstants.navigateDelay, () async {
       if (!mounted) return;
       await _splash.navigateAfterSplash();
@@ -77,8 +72,8 @@ class _SplashScreenState extends State<SplashScreen>
             children: [
               Opacity(
                 opacity: _bgOpacity.value,
-                child: SvgPicture.asset(
-                  'assets/splash-bg.svg',
+                child: Image.asset(
+                  'assets/chat.jpeg',
                   fit: BoxFit.cover,
                 ),
               ),

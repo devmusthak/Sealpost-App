@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
@@ -307,8 +306,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          SvgPicture.asset(
-            'assets/head-login.svg',
+          Image.asset(
+            'assets/chat.jpeg',
             fit: BoxFit.cover,
             alignment: Alignment.topCenter,
           ),

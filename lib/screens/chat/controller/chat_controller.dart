@@ -1,15 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 
-import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import '../../../core/call/agora_call_service.dart';
+import '../../../core/call/incoming_call_kit_coordinator.dart';
+import '../../../core/call/voice_call_navigation.dart';
 import '../../../core/network/api_endpoints.dart';
 import '../../../data/auth/auth_repository.dart';
 import '../../../data/chat/chat_contact.dart';
 import '../../../data/chat/chat_repository.dart';
-import '../view/agora_audio_call_screen.dart';
 
 /// Chat home: most recent conversation first (matches server `listContacts` ordering).
 int _compareChatContactsForHome(ChatContact a, ChatContact b) {
@@ -35,8 +36,6 @@ class ChatController extends GetxController {
   String? _openConversationPeerId;
   bool _openConversationIsGroup = false;
   final Map<String, Timer> _typingTimers = {};
-  bool _incomingDialogVisible = false;
-
   /// Active socket for chat thread listeners (same connection as contacts).
   io.Socket? get chatSocket => _socket;
 
@@ -135,6 +134,14 @@ class ChatController extends GetxController {
     _socket!.on('chat:voice:recording', _onTyping);
     _socket!.on('voice_recording', _onTyping);
     _socket!.on('call:invite', _onIncomingCallInvite);
+    _socket!.on('call_ringing', _onIncomingCallInvite);
+    _socket!.on('call_accepted', (d) => _pipeCallEvent('call_accepted', d));
+    _socket!.on('call_rejected', (d) => _pipeCallEvent('call_rejected', d));
+    _socket!.on('call_ended', (d) => _pipeCallEvent('call_ended', d));
+    _socket!.on('call_missed', (d) => _pipeCallEvent('call_missed', d));
+    _socket!.on('call_failed', (d) => _pipeCallEvent('call_failed', d));
+    _socket!.on('call_initiated', (d) => _pipeCallEvent('call_initiated', d));
+    _socket!.on('call_remote_ringing', (d) => _pipeCallEvent('call_remote_ringing', d));
     _socket!.onConnect((_) {
       final peer = _openConversationPeerId;
       if (peer != null && peer.isNotEmpty) {
@@ -168,54 +175,56 @@ class ChatController extends GetxController {
     });
   }
 
+  void _pipeCallEvent(String eventName, dynamic data) {
+    final map = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+    if (eventName == 'call_ended' ||
+        eventName == 'call_missed' ||
+        eventName == 'call_rejected' ||
+        eventName == 'call_failed') {
+      final id = '${map['callId'] ?? ''}'.trim();
+      if (id.isNotEmpty) {
+        unawaited(IncomingCallKitCoordinator.dismissForCallId(id));
+      }
+    }
+    if (Get.isRegistered<AgoraCallService>()) {
+      Get.find<AgoraCallService>().emitCallSignal(eventName, map);
+    }
+  }
+
   void _onIncomingCallInvite(dynamic data) {
     final map = data is Map ? Map<String, dynamic>.from(data) : null;
     if (map == null) return;
-    if (_incomingDialogVisible) return;
-    final fromName = '${map['fromName'] ?? 'Incoming caller'}'.trim();
-
-    _incomingDialogVisible = true;
-    Get.dialog<void>(
-      AlertDialog(
-        title: const Text('Incoming audio call'),
-        content: Text('$fromName is calling you.'),
-        actions: [
-          TextButton(
-            onPressed: () {
-              _incomingDialogVisible = false;
-              if (Get.isDialogOpen == true) {
-                Get.back<void>();
-              }
-            },
-            child: const Text('Decline'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              _incomingDialogVisible = false;
-              if (Get.isDialogOpen == true) {
-                Get.back<void>();
-              }
-              try {
-                final session = Get.find<AgoraCallService>()
-                    .sessionFromInvitePayload(map);
-                await Get.to<void>(
-                  () => AgoraAudioCallScreen(
-                    appId: Get.find<AgoraCallService>().appId,
-                    peerName: fromName.isEmpty ? 'Incoming caller' : fromName,
-                    session: session,
-                  ),
-                );
-              } catch (_) {
-                /* ignore invalid incoming payload */
-              }
-            },
-            child: const Text('Accept'),
-          ),
-        ],
-      ),
-      barrierDismissible: false,
-    ).whenComplete(() {
-      _incomingDialogVisible = false;
-    });
+    final svc = Get.find<AgoraCallService>();
+    final callId = '${map['callId'] ?? ''}'.trim();
+    if (callId.isNotEmpty && !svc.claimCallUi(callId)) {
+      return;
+    }
+    _pipeCallEvent('call_ringing', map);
+    final selfId = (Get.find<AuthRepository>().userId ?? '').trim();
+    unawaited(() async {
+      try {
+        if (Platform.isIOS) {
+          final payload = <String, String>{
+            ...map.map((k, v) => MapEntry(k.toString(), '$v')),
+            'type': 'incoming_voice_call',
+            'notificationType': 'incoming_call',
+            'callType': 'audio',
+          };
+          await IncomingCallKitCoordinator.presentFromFcmData(payload);
+          return;
+        }
+        if (callId.isNotEmpty) {
+          await IncomingCallKitCoordinator.dismissNativeIfSameCall(callId);
+        }
+        final session = svc.sessionFromInvitePayload(map, selfUserId: selfId);
+        await openVoiceCallScreen(session: session);
+      } catch (_) {
+        if (callId.isNotEmpty) {
+          svc.releaseCallUi(callId);
+        } else {
+          svc.releaseCallUi();
+        }
+      }
+    }());
   }
 }

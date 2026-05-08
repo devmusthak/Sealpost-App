@@ -16,11 +16,13 @@ import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart' hide Config;
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import 'package:record/record.dart';
 
 import '../../../core/call/agora_call_service.dart';
+import '../../../core/call/voice_call_navigation.dart';
 import '../../../core/push/local_notification_service.dart';
 import '../../../data/auth/auth_repository.dart';
 import '../../../data/chat/chat_image_message.dart';
@@ -47,7 +49,6 @@ import '../widgets/group_invite_preview_widget.dart';
 import 'chat_image_preview_screen.dart';
 import 'chat_image_viewer_screen.dart';
 import 'chat_pdf_viewer_screen.dart';
-import 'agora_audio_call_screen.dart';
 import 'chat_video_preview_screen.dart';
 import 'chat_video_viewer_screen.dart';
 import 'group_info_view.dart';
@@ -696,6 +697,25 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     }
 
     final callType = video ? 'Video call' : 'Voice call';
+    final mic = await Permission.microphone.status;
+    final micStatus = mic.isGranted ? mic : await Permission.microphone.request();
+    if (!micStatus.isGranted) {
+      if (micStatus.isPermanentlyDenied || micStatus.isRestricted) {
+        await openAppSettings();
+      }
+      if (!mounted) return;
+      _showThreadSnackBar(
+        SnackBar(
+          content: Text(
+            'Microphone access is required for voice calls. Enable it in Settings > Sealpost > Microphone.',
+            style: GoogleFonts.ptSans(),
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
     try {
       final auth = Get.find<AuthRepository>();
       final session = await Get.find<AgoraCallService>().createAndInviteAudioSession(
@@ -709,15 +729,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
             'Sealpost User',
       );
       if (!mounted) return;
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(
-          builder: (_) => AgoraAudioCallScreen(
-            appId: Get.find<AgoraCallService>().appId,
-            peerName: peer.name.isEmpty ? peer.email : peer.name,
-            session: session,
-          ),
-        ),
-      );
+      await openVoiceCallScreen(session: session);
     } catch (error) {
       if (!mounted) return;
       _showThreadSnackBar(
@@ -734,19 +746,6 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
 
   Future<void> _startAudioCallFromToolbar(ChatContact peer) async {
     await _onCallActionTap(peer: peer, video: false);
-  }
-
-  Future<void> _showVideoNotReady() async {
-    if (!mounted) return;
-    _showThreadSnackBar(
-      SnackBar(
-        content: Text(
-          'Video call will be added next.',
-          style: GoogleFonts.ptSans(),
-        ),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
   }
 
   void _startJumpToQuoteHighlight(String messageId) {
@@ -3596,11 +3595,6 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   onPressed: () => unawaited(
                     _startAudioCallFromToolbar(peer),
                   ),
-                ),
-                IconButton(
-                  tooltip: 'Video call',
-                  icon: const Icon(Icons.videocam_rounded),
-                  onPressed: () => unawaited(_showVideoNotReady()),
                 ),
               ],
               if (!peer.isGroupConversation)
