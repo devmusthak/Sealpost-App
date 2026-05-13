@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 
 import '../network/api_endpoints.dart';
@@ -22,6 +23,7 @@ class VoiceCallSession {
     required this.isIncoming,
     this.conversationId,
     this.outgoingCalleeRingingHint = false,
+    this.incomingAcceptAlreadyPosted = false,
   });
 
   final String callId;
@@ -39,6 +41,9 @@ class VoiceCallSession {
 
   /// Outgoing: server says callee had an active socket — show "Ringing…" immediately (avoids missing socket race).
   final bool outgoingCalleeRingingHint;
+
+  /// True when POST /call/accept was already sent (e.g. CallKit accept hydration) so the call screen must not repeat it.
+  final bool incomingAcceptAlreadyPosted;
 
   String get effectiveAppId =>
       agoraAppId.trim().isNotEmpty ? agoraAppId.trim() : AgoraCallConfig.appId;
@@ -93,6 +98,7 @@ class AgoraCallService extends GetxService {
   VoiceCallSession sessionFromInvitePayload(
     Map<String, dynamic> payload, {
     required String selfUserId,
+    bool incomingAcceptAlreadyPosted = false,
   }) {
     final channelName = '${payload['channelName'] ?? ''}'.trim();
     final token =
@@ -129,6 +135,7 @@ class AgoraCallService extends GetxService {
       isIncoming: true,
       conversationId: conversationId.isNotEmpty ? conversationId : null,
       outgoingCalleeRingingHint: false,
+      incomingAcceptAlreadyPosted: incomingAcceptAlreadyPosted,
     );
   }
 
@@ -199,7 +206,34 @@ class AgoraCallService extends GetxService {
       isIncoming: false,
       conversationId: conversationId,
       outgoingCalleeRingingHint: calleeOnline,
+      incomingAcceptAlreadyPosted: false,
     );
+  }
+
+  /// POST /call/accept — used to hydrate a partial CallKit payload. Returns parsed JSON on 2xx, null otherwise.
+  Future<Map<String, dynamic>?> postVoiceCallAcceptForHydration(String callId) async {
+    if (!Get.isRegistered<Dio>()) return null;
+    final id = callId.trim();
+    if (id.isEmpty) return null;
+    final dio = Get.find<Dio>();
+    try {
+      final res = await dio.post<dynamic>(
+        ApiEndpoints.voiceCallAccept,
+        data: {'callId': id},
+      );
+      if ((res.statusCode ?? 500) >= 400) return null;
+      return _toMap(res.data);
+    } on DioException catch (e) {
+      final code = e.response?.statusCode ?? 0;
+      if (kDebugMode) {
+        debugPrint(
+          '[callkit-ios] accept hydrate failed status=$code data=${e.response?.data}',
+        );
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> acceptCall(String callId) async {

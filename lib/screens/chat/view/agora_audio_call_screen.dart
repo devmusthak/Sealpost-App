@@ -17,12 +17,16 @@ class AgoraAudioCallScreen extends StatefulWidget {
     super.key,
     required this.session,
     this.autoAcceptIncoming = false,
+    this.acceptedFromCallkit = false,
   });
 
   final VoiceCallSession session;
 
   /// When true (e.g. user tapped Accept on the incoming-call notification), join immediately.
   final bool autoAcceptIncoming;
+
+  /// True when user accepted from native CallKit (logged for iOS accept diagnostics).
+  final bool acceptedFromCallkit;
 
   @override
   State<AgoraAudioCallScreen> createState() => _AgoraAudioCallScreenState();
@@ -40,6 +44,8 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
   bool _speakerOn = true;
   bool _joinedRtc = false;
   bool _pickedIncoming = false;
+  /// Prevents double-invocation of [_pickIncoming] (manual double-tap or microtask + button).
+  bool _incomingPickupStarted = false;
 
   /// Server told us the callee is being notified (socket online or FCM sent) — show "Ringing…" for caller.
   bool _peerNotifiedRinging = false;
@@ -51,6 +57,8 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
   bool _isClosingScreen = false;
   bool _engineTeardownStarted = false;
   Timer? _closeDelayTimer;
+  int _iosSessionJoinRetries = 0;
+  bool _joinRetryInFlight = false;
 
   VoiceCallSession get _s => widget.session;
 
@@ -102,11 +110,21 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
     _bindSignaling();
     _syncRingToneLoop();
     if (_isIncoming) {
-      _connecting = false;
+      if (kDebugMode && defaultTargetPlatform == TargetPlatform.iOS) {
+        debugPrint(
+          '[callkit-ios] call screen opened autoAccept=${widget.autoAcceptIncoming} acceptedFromCallkit=${widget.acceptedFromCallkit}',
+        );
+      }
       if (widget.autoAcceptIncoming) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
+        // CallKit / notification Accept: first frame must show "Connecting…", not Accept/Decline.
+        _pickedIncoming = true;
+        _connecting = true;
+        Future<void>.microtask(() {
+          if (!mounted) return;
           unawaited(_pickIncoming());
         });
+      } else {
+        _connecting = false;
       }
     } else {
       unawaited(_startOutgoing());
@@ -304,6 +322,15 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
           if (kDebugMode && defaultTargetPlatform == TargetPlatform.iOS) {
             debugPrint('[callkit-ios] Agora join failure err=$err msg=$msg');
           }
+          if (defaultTargetPlatform == TargetPlatform.iOS &&
+              !_connected &&
+              _iosSessionJoinRetries < 3 &&
+              !_joinRetryInFlight &&
+              _isIosAudioSessionActivationFailure(err, msg)) {
+            _iosSessionJoinRetries++;
+            unawaited(_retryIosJoinAfterSessionFailure());
+            return;
+          }
           if (!mounted) return;
           setState(() {
             _connecting = false;
@@ -323,6 +350,46 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
       uid: _s.localUid,
       options: const ChannelMediaOptions(),
     );
+  }
+
+  bool _isIosAudioSessionActivationFailure(Object err, String msg) {
+    final hay = '$err $msg'.toLowerCase();
+    return hay.contains('561017449') ||
+        hay.contains('session activation') ||
+        hay.contains('nsosstatuserrordomain');
+  }
+
+  Future<void> _retryIosJoinAfterSessionFailure() async {
+    if (_joinRetryInFlight || !mounted || _connected) return;
+    _joinRetryInFlight = true;
+    try {
+      await Future<void>.delayed(const Duration(milliseconds: 420));
+      if (!mounted || _connected) return;
+      final eng = _engine;
+      if (eng == null) return;
+      if (kDebugMode) {
+        debugPrint(
+          '[callkit-ios] Agora join retry $_iosSessionJoinRetries after session activation issue',
+        );
+      }
+      try {
+        await eng.leaveChannel();
+      } catch (_) {}
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+      if (!mounted || _connected) return;
+      await eng.joinChannel(
+        token: _s.token ?? '',
+        channelId: _s.channelName,
+        uid: _s.localUid,
+        options: const ChannelMediaOptions(),
+      );
+    } catch (e) {
+      if (kDebugMode && defaultTargetPlatform == TargetPlatform.iOS) {
+        debugPrint('[callkit-ios] join retry threw $e');
+      }
+    } finally {
+      _joinRetryInFlight = false;
+    }
   }
 
   Future<void> _leaveAndPop() async {
@@ -381,7 +448,8 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
   }
 
   Future<void> _pickIncoming() async {
-    if (_pickedIncoming) return;
+    if (_incomingPickupStarted) return;
+    _incomingPickupStarted = true;
     setState(() {
       _pickedIncoming = true;
       _connecting = true;
@@ -389,23 +457,36 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
     });
     _syncRingToneLoop();
     if (kDebugMode && defaultTargetPlatform == TargetPlatform.iOS) {
-      debugPrint('[callkit-ios] incoming accept flow start');
+      debugPrint('[callkit-ios] incoming accept flow start alreadyPosted=${_s.incomingAcceptAlreadyPosted}');
     }
-    try {
-      await Get.find<AgoraCallService>().acceptCall(_s.callId);
-    } catch (_) {
-      /* still attempt RTC — server may have already transitioned */
+    if (!_s.incomingAcceptAlreadyPosted) {
+      try {
+        await Get.find<AgoraCallService>().acceptCall(_s.callId);
+        if (kDebugMode && defaultTargetPlatform == TargetPlatform.iOS) {
+          debugPrint('[callkit-ios] accept API success callId=${_s.callId}');
+        }
+      } catch (e) {
+        if (kDebugMode && defaultTargetPlatform == TargetPlatform.iOS) {
+          debugPrint('[callkit-ios] accept API failed (continuing to RTC) $e');
+        }
+      }
+    } else if (kDebugMode && defaultTargetPlatform == TargetPlatform.iOS) {
+      debugPrint('[callkit-ios] accept API skipped (already posted from CallKit hydrate)');
     }
     if (defaultTargetPlatform == TargetPlatform.iOS) {
-      final activated = await IncomingCallKitCoordinator.waitForAudioSessionActivation(
-        retryDelay: const Duration(milliseconds: 300),
-        maxRetries: 8,
-      );
-      if (kDebugMode) {
-        debugPrint('[callkit-ios] audio session activated before Agora=$activated');
+      if (!IncomingCallKitCoordinator.isCallKitAudioSessionActive) {
+        for (var i = 0; i < 2; i++) {
+          if (IncomingCallKitCoordinator.isCallKitAudioSessionActive) break;
+          await Future<void>.delayed(const Duration(milliseconds: 120));
+        }
+        if (!IncomingCallKitCoordinator.isCallKitAudioSessionActive) {
+          await Future<void>.delayed(const Duration(milliseconds: 180));
+        }
       }
-      if (!activated) {
-        await Future<void>.delayed(const Duration(milliseconds: 400));
+      if (kDebugMode) {
+        debugPrint(
+          '[callkit-ios] audio session active=${IncomingCallKitCoordinator.isCallKitAudioSessionActive}',
+        );
       }
     }
     await _runJoinFlow();

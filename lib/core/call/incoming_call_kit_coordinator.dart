@@ -36,6 +36,9 @@ class IncomingCallKitCoordinator {
   static final Map<String, DateTime> _ignoredEndedCallIds = <String, DateTime>{};
   static final Set<String> _acceptHandledCallIds = <String>{};
   static bool _isCallKitAudioSessionActive = false;
+
+  /// Latest CallKit audio session activation flag (iOS); do not treat as sole gate for Agora join.
+  static bool get isCallKitAudioSessionActive => _isCallKitAudioSessionActive;
   static Future<void>? _voipSyncInFlight;
   static String? _lastVoipTokenSynced;
   static DateTime? _lastVoipSyncAt;
@@ -278,9 +281,33 @@ class IncomingCallKitCoordinator {
       if (first is! Map) return;
       final accepted = first['isAccepted'] == true;
       if (!accepted) return;
-      final invite = _inviteStringsFromDynamicExtra(first['extra'] ?? first);
-      if (invite == null) return;
+      Map<String, String>? invite =
+          _inviteStringsFromDynamicExtra(first['extra'] ?? first);
+      final callIdFromNative = _callIdFromBody(first) ?? '';
+      if (invite == null && callIdFromNative.isNotEmpty) {
+        if (kDebugMode && Platform.isIOS) {
+          debugPrint(
+            '[callkit-ios] syncAccepted: extra incomplete, rebuilding callId=$callIdFromNative',
+          );
+        }
+        invite = _minimalInviteForCallId(callIdFromNative);
+        await _hydrateInviteFromAcceptIfNeeded(invite, callIdFromNative);
+      } else if (invite != null && !_inviteRtcReadyForSession(invite)) {
+        final cid = (invite['callId'] ?? callIdFromNative).trim();
+        if (cid.isNotEmpty) {
+          await _hydrateInviteFromAcceptIfNeeded(invite, cid);
+        }
+      }
+      if (invite == null || !_inviteRtcReadyForSession(invite)) {
+        if (kDebugMode && Platform.isIOS) {
+          debugPrint(
+            '[callkit-ios] syncAccepted: skip invite incomplete after hydrate',
+          );
+        }
+        return;
+      }
       invite['_autoAccept'] = '1';
+      invite['_acceptedFromCallkit'] = '1';
       if (!Get.isRegistered<PendingVoiceCall>()) return;
       Get.find<PendingVoiceCall>().applyFromData(invite);
       openPendingIncomingVoiceCallIfReady();
@@ -304,6 +331,96 @@ class IncomingCallKitCoordinator {
       if (_isCallKitAudioSessionActive) return true;
     }
     return false;
+  }
+
+  static void _mergeAcceptBodyIntoInviteStrings(
+    Map<String, String> invite,
+    Map<String, dynamic> body,
+  ) {
+    for (final e in body.entries) {
+      if (e.value == null) continue;
+      final s = '${e.value}'.trim();
+      if (s.isNotEmpty) {
+        invite[e.key] = s;
+      }
+    }
+    final merged = IncomingCallPayload.normalizeInviteStrings(
+      Map<String, String>.from(invite),
+    );
+    invite
+      ..clear()
+      ..addAll(merged);
+  }
+
+  static bool _inviteHasCoreRtcFields(Map<String, String> invite) {
+    final ch = (invite['channelName'] ?? '').trim();
+    final tok = (invite['token'] ?? '').trim();
+    final uid = int.tryParse((invite['uid'] ?? '').trim()) ?? -1;
+    return ch.isNotEmpty && tok.isNotEmpty && uid >= 0;
+  }
+
+  static bool _inviteRtcReadyForSession(Map<String, String> invite) {
+    if (!_inviteHasCoreRtcFields(invite)) return false;
+    if (!Get.isRegistered<AuthRepository>()) return false;
+    final selfId = (Get.find<AuthRepository>().userId ?? '').trim();
+    final callerId = (invite['callerId'] ?? invite['fromUserId'] ?? '').trim();
+    final receiverId = (invite['receiverId'] ?? '').trim();
+    final peerId = callerId.isNotEmpty
+        ? callerId
+        : (receiverId.isNotEmpty && receiverId != selfId ? receiverId : '');
+    return peerId.isNotEmpty;
+  }
+
+  static Map<String, String> _minimalInviteForCallId(String callId) {
+    return IncomingCallPayload.normalizeInviteStrings({
+      'callId': callId.trim(),
+      'type': 'incoming_voice_call',
+      'notificationType': 'incoming_call',
+      'callType': 'audio',
+    });
+  }
+
+  static Future<void> _hydrateInviteFromAcceptIfNeeded(
+    Map<String, String> invite,
+    String callId,
+  ) async {
+    if (_inviteRtcReadyForSession(invite)) return;
+    if (!Get.isRegistered<AgoraCallService>()) return;
+    if (callId.isEmpty) return;
+    if (kDebugMode && Platform.isIOS) {
+      debugPrint(
+        '[callkit-ios] hydrating invite via POST /call/accept callId=$callId',
+      );
+    }
+    final body =
+        await Get.find<AgoraCallService>().postVoiceCallAcceptForHydration(callId);
+    if (body == null || body.isEmpty) {
+      if (Get.isRegistered<PendingVoiceCall>()) {
+        final prev = Get.find<PendingVoiceCall>().payload;
+        if (prev != null && (prev['callId'] ?? '').trim() == callId) {
+          if (kDebugMode && Platform.isIOS) {
+            debugPrint(
+              '[callkit-ios] hydrate: merging pending payload for callId=$callId',
+            );
+          }
+          for (final e in prev.entries) {
+            if (e.value.trim().isEmpty) continue;
+            if ((invite[e.key] ?? '').trim().isEmpty) {
+              invite[e.key] = e.value;
+            }
+          }
+          final merged = IncomingCallPayload.normalizeInviteStrings(
+            Map<String, String>.from(invite),
+          );
+          invite
+            ..clear()
+            ..addAll(merged);
+        }
+      }
+      return;
+    }
+    _mergeAcceptBodyIntoInviteStrings(invite, body);
+    invite['_incomingAcceptAlreadyPosted'] = '1';
   }
 
   static Map<String, String>? _inviteStringsFromDynamicExtra(dynamic extra) {
@@ -383,27 +500,69 @@ class IncomingCallKitCoordinator {
 
   static Future<void> _handleAccept(dynamic body) async {
     await CallRingtoneService.stop();
-    final invite = _parseEventToInvite(body);
-    if (invite == null) return;
-    final callId = (invite['callId'] ?? _callIdFromBody(body) ?? '').trim();
-    if (callId.isNotEmpty && _acceptHandledCallIds.contains(callId)) {
-      // iOS can emit repeated accept events for the same call.
-      // Handle only once so custom call screen flow is not re-triggered endlessly.
+    if (kDebugMode && Platform.isIOS) {
+      debugPrint('[callkit-ios] Event.actionCallAccept body=$body');
+    }
+    Map<String, String>? invite = _parseEventToInvite(body);
+    final callIdRaw =
+        (invite?['callId'] ?? _callIdFromBody(body) ?? '').trim();
+    if (invite == null && callIdRaw.isNotEmpty) {
+      if (kDebugMode && Platform.isIOS) {
+        debugPrint(
+          '[callkit-ios] accept: using minimal invite (parse returned null) callId=$callIdRaw',
+        );
+      }
+      invite = _minimalInviteForCallId(callIdRaw);
+    }
+    if (invite == null) {
+      if (kDebugMode && Platform.isIOS) {
+        debugPrint('[callkit-ios] accept: abort no callId / payload');
+      }
       return;
     }
+    final callId = (invite['callId'] ?? callIdRaw).trim();
+    if (callId.isNotEmpty && _acceptHandledCallIds.contains(callId)) {
+      if (kDebugMode && Platform.isIOS) {
+        debugPrint('[callkit-ios] accept duplicate suppressed callId=$callId');
+      }
+      return;
+    }
+
+    await _hydrateInviteFromAcceptIfNeeded(invite, callId);
+    if (!_inviteRtcReadyForSession(invite)) {
+      if (kDebugMode && Platform.isIOS) {
+        debugPrint(
+          '[callkit-ios] accept: still incomplete after hydrate callId=$callId '
+          'channel=${(invite['channelName'] ?? '').isNotEmpty} token=${(invite['token'] ?? '').isNotEmpty} '
+          'uid=${invite['uid']}',
+        );
+      }
+      return;
+    }
+
     if (callId.isNotEmpty) {
       _acceptHandledCallIds.add(callId);
     }
     if (kDebugMode && Platform.isIOS) {
-      debugPrint('[callkit-ios] accept received callId=$callId');
+      debugPrint('[callkit-ios] accept stored pending callId=$callId');
     }
-    // Do NOT call setCallConnected() here.
-    // In this app we hand off accepted calls to custom Agora UI immediately.
-    // Calling setCallConnected early can trigger iOS audio-session activation
-    // races (NSOSStatusErrorDomain "Session activation failed").
     invite['_autoAccept'] = '1';
-    if (!Get.isRegistered<PendingVoiceCall>()) return;
+    invite['_acceptedFromCallkit'] = '1';
+    if (!Get.isRegistered<PendingVoiceCall>()) {
+      if (kDebugMode && Platform.isIOS) {
+        debugPrint('[callkit-ios] accept: PendingVoiceCall not registered');
+      }
+      return;
+    }
     Get.find<PendingVoiceCall>().applyFromData(invite);
+    if (kDebugMode && Platform.isIOS) {
+      final p = Get.find<PendingVoiceCall>();
+      debugPrint(
+        '[callkit-ios] pending applied autoAccept=${p.autoAccept} '
+        'acceptedFromCallkit=${p.acceptedFromCallkit} '
+        'incomingAcceptAlreadyPosted=${p.incomingAcceptAlreadyPosted}',
+      );
+    }
     openPendingIncomingVoiceCallIfReady();
   }
 

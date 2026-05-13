@@ -210,7 +210,15 @@ class ChatController extends GetxController {
             'notificationType': 'incoming_call',
             'callType': 'audio',
           };
-          await IncomingCallKitCoordinator.presentFromFcmData(payload);
+          try {
+            await IncomingCallKitCoordinator.presentFromFcmData(payload);
+          } finally {
+            // Socket path claims UI to dedupe; CallKit is native UI only until Accept.
+            // Release so CallKit Accept can claim and open [AgoraAudioCallScreen].
+            if (callId.isNotEmpty) {
+              svc.releaseCallUi(callId);
+            }
+          }
           return;
         }
         if (callId.isNotEmpty) {

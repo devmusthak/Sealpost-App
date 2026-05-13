@@ -10,6 +10,12 @@ class PendingVoiceCall extends GetxController {
   /// When true, [AgoraAudioCallScreen] auto-accepts (notification "Accept" action).
   bool autoAccept = false;
 
+  /// User accepted from iOS CallKit (vs in-app ringing UI).
+  bool acceptedFromCallkit = false;
+
+  /// POST /call/accept was already sent while resolving CallKit payload (avoid duplicate accept).
+  bool incomingAcceptAlreadyPosted = false;
+
   bool get hasPending => payload != null && (payload!['callId'] ?? '').trim().isNotEmpty;
 
   void setFromMessage(RemoteMessage message) {
@@ -43,10 +49,15 @@ class PendingVoiceCall extends GetxController {
       payload = next;
     }
     autoAccept = autoAccept || d['_autoAccept'] == '1';
+    acceptedFromCallkit = acceptedFromCallkit || d['_acceptedFromCallkit'] == '1';
+    incomingAcceptAlreadyPosted =
+        incomingAcceptAlreadyPosted || d['_incomingAcceptAlreadyPosted'] == '1';
   }
 
   void clear() {
     payload = null;
     autoAccept = false;
+    acceptedFromCallkit = false;
+    incomingAcceptAlreadyPosted = false;
   }
 }

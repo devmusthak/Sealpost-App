@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/widgets.dart';
+import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 
 import 'agora_call_service.dart';
@@ -37,11 +37,13 @@ void _clearPendingIncomingRetry() {
 Future<void> openVoiceCallScreen({
   required VoiceCallSession session,
   bool autoAcceptIncoming = false,
+  bool acceptedFromCallkit = false,
 }) async {
   await Get.to<void>(
     () => AgoraAudioCallScreen(
       session: session,
       autoAcceptIncoming: autoAcceptIncoming,
+      acceptedFromCallkit: acceptedFromCallkit,
     ),
   );
 }
@@ -79,6 +81,11 @@ void openPendingIncomingVoiceCallIfReady() {
   final svc = Get.find<AgoraCallService>();
   final callId = (data['callId'] ?? '').trim();
   if (callId.isNotEmpty && !svc.claimCallUi(callId)) {
+    if (kDebugMode) {
+      debugPrint(
+        '[callkit-ios] openPendingIncomingVoiceCallIfReady: claimCallUi failed callId=$callId active=${svc.activeUiCallId}',
+      );
+    }
     return;
   }
 
@@ -86,14 +93,22 @@ void openPendingIncomingVoiceCallIfReady() {
     final session = svc.sessionFromInvitePayload(
       Map<String, dynamic>.from(data),
       selfUserId: selfId,
+      incomingAcceptAlreadyPosted: pending.incomingAcceptAlreadyPosted,
     );
+    final acceptedFromCallkit = pending.acceptedFromCallkit;
     pending.clear();
     _clearPendingIncomingRetry();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (kDebugMode) {
+      debugPrint(
+        '[callkit-ios] navigation: scheduling AgoraAudioCallScreen callId=$callId autoAccept=$autoAccept acceptedFromCallkit=$acceptedFromCallkit',
+      );
+    }
+    scheduleMicrotask(() {
       unawaited(
         openVoiceCallScreen(
           session: session,
           autoAcceptIncoming: autoAccept,
+          acceptedFromCallkit: acceptedFromCallkit,
         ),
       );
     });

@@ -142,8 +142,6 @@ class _SealpostAppState extends State<SealpostApp> with WidgetsBindingObserver {
     _presenceForeground = false;
     _presenceHeartbeat?.cancel();
     _presenceHeartbeat = null;
-    // iOS can terminate apps that do active network work during background
-    // transition. Delay and cancel if user resumes quickly.
     _presenceBackgroundSyncTimer?.cancel();
     _presenceBackgroundSyncTimer = Timer(const Duration(seconds: 2), () {
       if (!_presenceForeground) {

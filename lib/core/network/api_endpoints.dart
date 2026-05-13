@@ -5,8 +5,9 @@ abstract final class ApiEndpoints {
     if (fromEnv.isNotEmpty) {
       return fromEnv.endsWith('/') ? fromEnv : '$fromEnv/';
     }
-    return 'https://mail.livera.ae/';
+    // return 'https://mail.livera.ae/';
     // return 'http://192.168.1.6:4999/';
+    return 'http://172.17.179.249:4999/';
   }
 
   static const String health = '/health';
