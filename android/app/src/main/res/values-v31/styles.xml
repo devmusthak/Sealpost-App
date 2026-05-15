@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Black only: animated icon is solid black vector (replaces default launcher logo). -->
+    <style name="LaunchTheme" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/launch_brand</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_full_black_vector</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/launch_brand</item>
+        <item name="windowSplashScreenAnimationDuration">50</item>
+        <item name="postSplashScreenTheme">@style/NormalTheme</item>
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/launch_brand</item>
+    </style>
+</resources>

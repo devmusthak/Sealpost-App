@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>sealpost</string>
+	<string>LivConnect</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>sealpost</string>
+	<string>LivConnect</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -57,15 +57,15 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Sealpost needs camera access for video calls.</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Sealpost needs local network access for voice and video calls.</string>
+	<string>LivConnect uses the camera for video calls and to take photos in chat.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Sealpost needs microphone access for voice calls and voice messages in chat.</string>
+	<string>LivConnect uses the microphone for voice and video calls and voice messages in chat.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>LivConnect needs local network access for voice and video calls.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Sealpost saves images you choose to your photo library when you tap Save.</string>
+	<string>LivConnect saves images you choose to your photo library when you tap Save.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Sealpost needs access to your photo library to send images in chat.</string>
+	<string>LivConnect needs access to your photo library to send images in chat.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

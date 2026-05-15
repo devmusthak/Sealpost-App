@@ -34,6 +34,15 @@ class ChatScreen extends StatefulWidget {
   static const searchHint = Color(0xFF9AA0A6);
   static const appBarIcon = Color(0xFFE8EAED);
 
+  /// Shared by chat hint, Calls, and Reminder search pills (same size/weight/line height).
+  static TextStyle searchPillStyle(Color color) => GoogleFonts.ptSans(
+        color: color,
+        fontSize: 16,
+        fontWeight: FontWeight.w400,
+        height: 1.25,
+        letterSpacing: 0,
+      );
+
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
@@ -591,12 +600,7 @@ class _ChatSearchHeader extends StatelessWidget {
                     Expanded(
                       child: Text(
                         'Search in chats',
-                        style: GoogleFonts.ptSans(
-                          color: hintColor,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w400,
-                          height: 1.25,
-                        ),
+                        style: ChatScreen.searchPillStyle(hintColor),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),

@@ -21,13 +21,17 @@ import 'package:file_picker/file_picker.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 import 'package:record/record.dart';
 
+import '../../../core/app_branding.dart';
 import '../../../core/call/agora_call_service.dart';
+import '../../../core/call/incoming_call_kit_coordinator.dart';
 import '../../../core/call/voice_call_navigation.dart';
+import '../../../core/permissions/camera_permission_helper.dart';
 import '../../../core/push/local_notification_service.dart';
 import '../../../data/auth/auth_repository.dart';
 import '../../../data/chat/chat_image_message.dart';
 import '../../../data/chat/chat_media_repository.dart';
 import '../../../data/chat/chat_poll_message.dart';
+import '../../../data/chat/call_event_chat_message.dart';
 import '../../../data/chat/chat_contact.dart';
 import '../../../data/chat/chat_message_dto.dart';
 import '../../../data/chat/chat_repository.dart';
@@ -683,20 +687,8 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     required bool video,
   }) async {
     if (!mounted) return;
-    if (video) {
-      _showThreadSnackBar(
-        SnackBar(
-          content: Text(
-            'Video call is not integrated yet.',
-            style: GoogleFonts.ptSans(),
-          ),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
 
-    final callType = video ? 'Video call' : 'Voice call';
+    final callLabel = video ? 'Video call' : 'Voice call';
     final mic = await Permission.microphone.status;
     final micStatus = mic.isGranted ? mic : await Permission.microphone.request();
     if (!micStatus.isGranted) {
@@ -707,7 +699,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       _showThreadSnackBar(
         SnackBar(
           content: Text(
-            'Microphone access is required for voice calls. Enable it in Settings > Sealpost > Microphone.',
+            'Microphone access is required for calls. ${AppBranding.settingsPermissionHint('Microphone')}',
             style: GoogleFonts.ptSans(),
           ),
           behavior: SnackBarBehavior.floating,
@@ -716,18 +708,67 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       return;
     }
 
+    if (video) {
+      final camGranted = await ensureCameraPermission();
+      if (!camGranted) {
+        final camStatus = await Permission.camera.status;
+        if (camStatus.isPermanentlyDenied || camStatus.isRestricted) {
+          await openAppSettings();
+        }
+        if (!mounted) return;
+        _showThreadSnackBar(
+          SnackBar(
+            content: Text(
+              'Camera access is required for video calls. ${AppBranding.settingsPermissionHint('Camera')}',
+              style: GoogleFonts.ptSans(),
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+    }
+
     try {
       final auth = Get.find<AuthRepository>();
-      final session = await Get.find<AgoraCallService>().createAndInviteAudioSession(
+      final svc = Get.find<AgoraCallService>();
+      final selfId = (auth.userId ?? '').trim();
+      final callerName =
+          auth.session?.name ??
+          auth.session?.email ??
+          auth.userId ??
+          AppBranding.defaultUserLabel;
+      final peerName = peer.name.isEmpty ? peer.email : peer.name;
+
+      if (video) {
+        if (!mounted) return;
+        final placeholder = VoiceCallSession.outgoingConnecting(
+          peerId: peer.id,
+          peerName: peerName,
+          conversationId: peer.conversationId,
+          selfUserId: selfId,
+          callType: 'video',
+        );
+        await openVideoCallScreen(
+          session: placeholder,
+          outgoingInviteFuture: svc.createAndInviteVideoSession(
+            peerId: peer.id,
+            peerName: peerName,
+            conversationId: peer.conversationId,
+            callerName: callerName,
+          ),
+        );
+        return;
+      }
+
+      final session = await svc.createAndInviteAudioSession(
         peerId: peer.id,
-        peerName: peer.name.isEmpty ? peer.email : peer.name,
+        peerName: peerName,
         conversationId: peer.conversationId,
-        callerName:
-            auth.session?.name ??
-            auth.session?.email ??
-            auth.userId ??
-            'Sealpost User',
+        callerName: callerName,
       );
+      if (!mounted) return;
+      await IncomingCallKitCoordinator.startOutgoingCallkitIfSupported(session: session);
       if (!mounted) return;
       await openVoiceCallScreen(session: session);
     } catch (error) {
@@ -735,7 +776,7 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
       _showThreadSnackBar(
         SnackBar(
           content: Text(
-            error is StateError ? error.message : '$callType failed to start',
+            error is StateError ? error.message : '$callLabel failed to start',
             style: GoogleFonts.ptSans(),
           ),
           behavior: SnackBarBehavior.floating,
@@ -744,9 +785,6 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
     }
   }
 
-  Future<void> _startAudioCallFromToolbar(ChatContact peer) async {
-    await _onCallActionTap(peer: peer, video: false);
-  }
 
   void _startJumpToQuoteHighlight(String messageId) {
     _jumpHighlightTimer?.cancel();
@@ -3307,6 +3345,14 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                             },
                             replySenderLabelResolver: (q) =>
                                 _resolveReplySenderLabel(q, peer),
+                            onCallEventTap: (ev) {
+                              unawaited(
+                                _onCallActionTap(
+                                  peer: peer,
+                                  video: ev.isVideoKind,
+                                ),
+                              );
+                            },
                           ),
                         ],
                       ),
@@ -3589,12 +3635,58 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
                   },
                 ),
               if (!peer.isGroupConversation) ...[
-                IconButton(
+                PopupMenuButton<String>(
                   tooltip: 'Call',
                   icon: const Icon(Icons.call_rounded),
-                  onPressed: () => unawaited(
-                    _startAudioCallFromToolbar(peer),
+                  color: Colors.black,
+                  surfaceTintColor: Colors.transparent,
+                  shadowColor: Colors.black54,
+                  elevation: 8,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
                   ),
+                  onSelected: (value) => unawaited(
+                    _onCallActionTap(
+                      peer: peer,
+                      video: value == 'video',
+                    ),
+                  ),
+                  itemBuilder: (context) => [
+                    PopupMenuItem(
+                      value: 'voice',
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.call_rounded,
+                            color: Colors.white,
+                            size: 22,
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'Voice Call',
+                            style: GoogleFonts.ptSans(color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'video',
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.videocam_rounded,
+                            color: Colors.white,
+                            size: 22,
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'Video Call',
+                            style: GoogleFonts.ptSans(color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ],
               if (!peer.isGroupConversation)
@@ -3962,6 +4054,24 @@ class _ChatThreadScreenState extends State<ChatThreadScreen> {
 
   Future<void> _openCameraForChat() async {
     if (!mounted || _myId.isEmpty) return;
+    final camGranted = await ensureCameraPermission();
+    if (!camGranted) {
+      final camStatus = await Permission.camera.status;
+      if (camStatus.isPermanentlyDenied || camStatus.isRestricted) {
+        await openAppSettings();
+      }
+      if (!mounted) return;
+      _showThreadSnackBar(
+        SnackBar(
+          content: Text(
+            'Camera access is required. ${AppBranding.settingsPermissionHint('Camera')}',
+            style: GoogleFonts.ptSans(),
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
     final pick = ImagePicker();
     final file = await pick.pickImage(
       source: ImageSource.camera,
@@ -6710,6 +6820,7 @@ class _MessageBubble extends StatelessWidget {
     this.onPollVote,
     this.onPollSeeVotes,
     this.replySenderLabelResolver,
+    this.onCallEventTap,
   });
 
   final _UiMsg msg;
@@ -6736,6 +6847,7 @@ class _MessageBubble extends StatelessWidget {
   final ValueChanged<String>? onPollVote;
   final VoidCallback? onPollSeeVotes;
   final String Function(ChatReplyQuote quote)? replySenderLabelResolver;
+  final ValueChanged<CallEventChatMessage>? onCallEventTap;
 
   static const _jumpHighlightTint = Color(0xFF7DD3FC);
   static const _selectionHighlightTint = Color(0xFF64B5F6);
@@ -6777,6 +6889,10 @@ class _MessageBubble extends StatelessWidget {
     }
     final poll = ChatPollMessage.tryParse(t);
     if (poll != null) return poll.question;
+    final ce = CallEventChatMessage.tryParse(t);
+    if (ce != null) {
+      return ce.isMissedKind ? 'Missed call' : 'Voice call';
+    }
     // Fallback for non-JSON map-like payload previews that may come from older rows.
     final low = t.toLowerCase();
     if (low.startsWith('{') && low.contains('t:')) {
@@ -6787,6 +6903,9 @@ class _MessageBubble extends StatelessWidget {
       }
       if (low.contains('t:img')) return 'Photo';
       if (low.contains('t:vid')) return 'Video';
+      if (low.contains('t:call_event') || low.contains('t:vc_notice')) {
+        return 'Voice call';
+      }
       return 'Attachment';
     }
     return t;
@@ -6880,6 +6999,141 @@ class _MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final outgoing = msg.senderId == myId;
+    final callEvent = CallEventChatMessage.tryParse(msg.body);
+    if (callEvent != null) {
+      final meta = _metaStyle(context);
+      final missedIncomingIcon = callEvent.missedCalleeStyle(myId);
+      final iconColor = missedIncomingIcon
+          ? const Color(0xFFE53935)
+          : const Color(0xFFCFD8DC);
+      final IconData phoneIcon;
+      if (callEvent.isMissedKind && missedIncomingIcon) {
+        phoneIcon = Icons.phone_missed;
+      } else if (callEvent.isVideoKind) {
+        phoneIcon = Icons.videocam;
+      } else {
+        phoneIcon = Icons.call;
+      }
+      final title = callEvent.titleForViewer(myId);
+      final sub = callEvent.subtitleForViewer(myId);
+      // Incoming: comfortable padding all around. Outgoing: same as before with a
+      // bit more on the right so the timestamp is not tight against the bubble edge.
+      final callBubblePadding = outgoing
+          ? const EdgeInsets.fromLTRB(10, 9, 16, 8)
+          : const EdgeInsets.symmetric(horizontal: 16, vertical: 11);
+      Widget bubbleChild = ClipPath(
+        clipper: outgoing
+            ? const _OutgoingBubbleClipper()
+            : const _IncomingBubbleClipper(),
+        child: ColoredBox(
+          color: outgoing
+              ? _ChatThreadColors.outgoingBubble
+              : _ChatThreadColors.incomingBubble,
+          child: Padding(
+            padding: callBubblePadding,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: outgoing ? 0.15 : 0.2),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(phoneIcon, color: iconColor, size: 22),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        title,
+                        style: GoogleFonts.ptSans(
+                          color: _ChatThreadColors.bubbleText,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          height: 1.25,
+                        ),
+                      ),
+                      if (sub != null && sub.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          sub,
+                          style: GoogleFonts.ptSans(
+                            color: _ChatThreadColors.bubbleMeta,
+                            fontSize: 13,
+                            height: 1.25,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(timeLabel, style: meta),
+              ],
+            ),
+          ),
+        ),
+      );
+      if (selectionHighlight || jumpHighlightActive) {
+        bubbleChild = Stack(
+          fit: StackFit.passthrough,
+          children: [
+            bubbleChild,
+            if (selectionHighlight)
+              Positioned.fill(
+                child: ColoredBox(
+                  color: _selectionHighlightTint.withValues(
+                    alpha: _selectionHighlightOpacity,
+                  ),
+                ),
+              ),
+            if (jumpHighlightActive)
+              Positioned.fill(
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 260),
+                  opacity: jumpHighlightPulse ? 1 : 0.5,
+                  child: ColoredBox(
+                    color: _jumpHighlightTint.withValues(alpha: 0.38),
+                  ),
+                ),
+              ),
+          ],
+        );
+      }
+      Widget wrapped = bubbleChild;
+      if (onSelectionTap != null) {
+        wrapped = GestureDetector(
+          onTap: onSelectionTap,
+          behavior: HitTestBehavior.opaque,
+          child: wrapped,
+        );
+      } else if (onCallEventTap != null) {
+        wrapped = Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () => onCallEventTap!(callEvent),
+            onLongPress: onLongPressBubble,
+            splashColor: Colors.white.withValues(alpha: 0.08),
+            child: wrapped,
+          ),
+        );
+      }
+      return Align(
+        alignment: outgoing ? Alignment.centerRight : Alignment.centerLeft,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 320),
+          child: Container(
+            margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+            child: wrapped,
+          ),
+        ),
+      );
+    }
     final senderLabel = msg.senderName.trim().isNotEmpty
         ? msg.senderName.trim()
         : (outgoing ? 'You' : 'Member');

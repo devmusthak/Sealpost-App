@@ -1,10 +1,10 @@
-/// Chat policy and community safety terms for Sealpost chat features.
+/// Chat policy and community safety terms for LivConnect chat features.
 const String kChatPolicyFullText = '''
-SEALPOST CHAT POLICY
+LIVCONNECT CHAT POLICY
 
 Last updated: April 24, 2026
 
-This Chat Policy explains acceptable use of Sealpost chat features, including one-to-one messaging, group messaging, media sharing, voice notes, and link sharing. By using chat, you agree to follow this policy in addition to the Terms of Service and Data Processing Agreement.
+This Chat Policy explains acceptable use of LivConnect chat features, including one-to-one messaging, group messaging, media sharing, voice notes, and link sharing. By using chat, you agree to follow this policy in addition to the Terms of Service and Data Processing Agreement.
 
 1. RESPECTFUL COMMUNICATION
 Use chat in a lawful, respectful, and professional manner. Harassment, threats, hate speech, targeted abuse, or repeated unwanted contact is prohibited.
@@ -25,10 +25,10 @@ Do not use chat for unsolicited bulk messages, repetitive promotions, or automat
 You must not share malicious files, deceptive links, or copyrighted material without rights to distribute. Users should verify unknown files/links before opening.
 
 7. SAFETY SIGNALS AND ENFORCEMENT
-Sealpost may apply automated and manual abuse controls, including rate limits, temporary restrictions, warning notices, content/report review, and account suspension for policy violations.
+LivConnect may apply automated and manual abuse controls, including rate limits, temporary restrictions, warning notices, content/report review, and account suspension for policy violations.
 
 8. REPORTING AND COMPLIANCE
-If you receive abusive or suspicious content, report it through available support channels. Sealpost may cooperate with lawful requests from regulators or law enforcement where required.
+If you receive abusive or suspicious content, report it through available support channels. LivConnect may cooperate with lawful requests from regulators or law enforcement where required.
 
 9. DATA PROCESSING
 Chat content and metadata may be processed for delivery, reliability, security, anti-abuse, and diagnostics as described in our legal documents.
@@ -36,5 +36,5 @@ Chat content and metadata may be processed for delivery, reliability, security, 
 10. POLICY UPDATES
 We may update this Chat Policy from time to time. Continued use of chat after updates means you accept the revised policy.
 
-Thank you for helping keep Sealpost chat safe, trusted, and useful for everyone.
+Thank you for helping keep LivConnect chat safe, trusted, and useful for everyone.
 ''';

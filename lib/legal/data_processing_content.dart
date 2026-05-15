@@ -1,10 +1,10 @@
-/// Data Processing Agreement / privacy processing terms for Sealpost (5000+ characters).
+/// Data Processing Agreement / privacy processing terms for LivConnect (5000+ characters).
 const String kDataProcessingAgreementFullText = '''
 DATA PROCESSING AGREEMENT AND PRIVACY INFORMATION FOR EMAIL SERVICES
 
 Last updated: April 1, 2026
 
-This Data Processing Agreement ("DPA") describes how Sealpost ("Processor") processes personal data on behalf of customers ("Controller") when providing enterprise email hosting, mailbox management, security filtering, and related services ("Services"). It supplements our Terms of Service and applies where the EU General Data Protection Regulation ("GDPR"), UK GDPR, or similar laws require a written agreement between controller and processor.
+This Data Processing Agreement ("DPA") describes how LivConnect ("Processor") processes personal data on behalf of customers ("Controller") when providing enterprise email hosting, mailbox management, security filtering, and related services ("Services"). It supplements our Terms of Service and applies where the EU General Data Protection Regulation ("GDPR"), UK GDPR, or similar laws require a written agreement between controller and processor.
 
 1. SUBJECT MATTER AND DURATION
 Processing concerns email messages, headers, mailbox contents, authentication logs, administrative contacts, and support tickets that contain personal data. Processing lasts for the subscription term and for any period thereafter required by law or backup retention schedules.
@@ -77,11 +77,11 @@ We may update this DPA to reflect legal requirements or service changes. Materia
 
 CONTACT FOR DATA PROTECTION
 
-Contact details for our data protection contact appear in your Sealpost administrative console and on our website. For EU/UK representatives, refer to the published representative information where applicable.
+Contact details for our data protection contact appear in your LivConnect administrative console and on our website. For EU/UK representatives, refer to the published representative information where applicable.
 
 This document is provided for transparency and contractual purposes. It does not constitute legal advice; consult qualified counsel for your specific compliance program.
 
-By using Sealpost email services, you acknowledge that email inherently involves transmission across networks outside our direct control and that end-to-end encryption requires compatible client configuration and recipient cooperation. We implement industry-standard protections for data in our custody and provide tools for administrators to enforce policies that align with your regulatory environment, including healthcare, finance, education, and public sector frameworks where compatible with the Service design.
+By using LivConnect email services, you acknowledge that email inherently involves transmission across networks outside our direct control and that end-to-end encryption requires compatible client configuration and recipient cooperation. We implement industry-standard protections for data in our custody and provide tools for administrators to enforce policies that align with your regulatory environment, including healthcare, finance, education, and public sector frameworks where compatible with the Service design.
 
 We continuously evaluate emerging threats to email systems—including business email compromise, credential stuffing, and domain impersonation—and update controls accordingly. Your organization should complement platform controls with user training, device management, and incident response plans.
 

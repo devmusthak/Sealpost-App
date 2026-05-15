@@ -1,6 +1,7 @@
 import 'chat_contact.dart';
 import 'chat_image_message.dart';
 import 'chat_poll_message.dart';
+import 'call_event_chat_message.dart';
 
 /// Same prefixes as [chat_thread_view] `_ForwardedPayloadParse` (wire format).
 const _kForwardPrefix = '» Forwarded\n\n';
@@ -83,6 +84,10 @@ String chatListLastMessagePreview(String raw) {
     final poll = ChatPollMessage.tryParse(p);
     if (poll != null) {
       return _truncate(poll.question, 160);
+    }
+    final callEv = CallEventChatMessage.tryParse(p);
+    if (callEv != null) {
+      return callEv.isMissedKind ? 'Missed call' : 'Voice call';
     }
     if (p.startsWith('{') && p.contains('"t"')) {
       return 'Attachment';

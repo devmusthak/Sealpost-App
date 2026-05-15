@@ -673,12 +673,12 @@ class _MailAttachmentsSection extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        'Scanned by sealpost',
+                        'Scanned by LivConnect',
                         style: metaStyle,
                       ),
                       Tooltip(
                         message:
-                            'Sealpost reviews attachments to help keep your inbox safer.',
+                            'LivConnect reviews attachments to help keep your inbox safer.',
                         triggerMode: TooltipTriggerMode.tap,
                         child: Icon(
                           Icons.info_outline_rounded,
@@ -1086,7 +1086,7 @@ Future<void> _downloadAttachmentWithPathSnackbar(
 ) async {
   try {
     final docs = await getApplicationDocumentsDirectory();
-    final folder = Directory('${docs.path}/Sealpost');
+    final folder = Directory('${docs.path}/LivConnect');
     if (!await folder.exists()) {
       await folder.create(recursive: true);
     }
@@ -1260,7 +1260,7 @@ Future<void> _downloadFromSourcePath(
 ) async {
   try {
     final docs = await getApplicationDocumentsDirectory();
-    final folder = Directory('${docs.path}/Sealpost');
+    final folder = Directory('${docs.path}/LivConnect');
     if (!await folder.exists()) {
       await folder.create(recursive: true);
     }

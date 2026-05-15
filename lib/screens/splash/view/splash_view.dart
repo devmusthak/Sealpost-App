@@ -1,13 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
-
 import '../../../theme/app_theme.dart';
 import '../controller/splash_controller.dart';
 import '../model/splash_constants.dart';
 
+/// Custom splash: [assets/chat.jpeg], [assets/logo.svg], and LivConnect wordmark.
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -64,6 +63,7 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: kDarkBg,
       body: AnimatedBuilder(
         animation: _anim,
         builder: (context, _) {
@@ -85,14 +85,14 @@ class _SplashScreenState extends State<SplashScreen>
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        SvgPicture.asset(
-                          'assets/logo.svg',
-                          width: 72,
-                          height: 72,
+                        Image.asset(
+                          'assets/logo.png',
+                          width: 140,
+                          height: 140,
                         ),
                         const SizedBox(height: 20),
                         Text(
-                          'SEALPOST',
+                          'LIV CONNECT',
                           style: sealpostWordmarkStyle(
                             color: Colors.white.withValues(
                               alpha: 0.85 + 0.15 * _logoOpacity.value,

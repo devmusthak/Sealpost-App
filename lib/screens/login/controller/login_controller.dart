@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import '../../../core/app/startup_coordinator.dart';
 import '../../../data/auth/auth_exception.dart';
 import '../../../data/auth/auth_repository.dart';
 import '../../navigation/view/main_navigation_view.dart';
@@ -49,6 +50,9 @@ class LoginController extends GetxController {
         firebaseUid: LoginConstants.firebaseUidPlaceholder,
       );
       await repo.syncPresenceForActiveSession();
+      if (Get.isRegistered<StartupCoordinator>()) {
+        await Get.find<StartupCoordinator>().awaitHeavyReady;
+      }
       if (addAccountMode) {
         Get.offAll(() => const MainNavigationScreen());
       } else {

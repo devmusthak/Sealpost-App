@@ -7,8 +7,8 @@ import 'package:get/get.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../../core/call/agora_call_service.dart';
-import '../../../core/call/call_ringtone_service.dart';
 import '../../../core/call/incoming_call_kit_coordinator.dart';
+import '../../../core/call/outgoing_ringback_service.dart';
 
 /// WhatsApp-style full-screen voice call: incoming, ringing (outgoing), and active.
 /// Background: [assets/chat.jpeg]. Uses server [VoiceCallSession] + Agora RTC.
@@ -38,6 +38,7 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
   RtcEngine? _engine;
   bool _connecting = false;
   bool _connected = false;
+  DateTime? _connectedAt;
   bool _remoteJoined = false;
   bool _peerAccepted = false;
   bool _micMuted = false;
@@ -60,7 +61,7 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
   int _iosSessionJoinRetries = 0;
   bool _joinRetryInFlight = false;
 
-  VoiceCallSession get _s => widget.session;
+  late VoiceCallSession _s;
 
   bool get _isIncoming => _s.isIncoming;
 
@@ -102,13 +103,14 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
   @override
   void initState() {
     super.initState();
+    _s = widget.session;
     WidgetsBinding.instance.addObserver(this);
     _statusLine = null;
     if (!_isIncoming) {
       _peerNotifiedRinging = _s.outgoingCalleeRingingHint;
     }
     _bindSignaling();
-    _syncRingToneLoop();
+    _syncOutgoingRingback();
     if (_isIncoming) {
       if (kDebugMode && defaultTargetPlatform == TargetPlatform.iOS) {
         debugPrint(
@@ -138,30 +140,30 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
       final ev = '${payload['_event'] ?? ''}'.trim();
       switch (ev) {
         case 'call_rejected':
-          _stopRingToneLoop();
+          unawaited(OutgoingRingbackService.stop(reason: 'rejected'));
           _showTerminalStateThenClose('Call rejected');
           return;
         case 'call_cancelled':
-          _stopRingToneLoop();
+          unawaited(OutgoingRingbackService.stop(reason: 'cancelled'));
           _showTerminalStateThenClose('Call cancelled');
           return;
         case 'call_missed':
-          _stopRingToneLoop();
+          unawaited(OutgoingRingbackService.stop(reason: 'missed'));
           _showTerminalStateThenClose('No answer');
           return;
         case 'call_failed':
-          _stopRingToneLoop();
+          unawaited(OutgoingRingbackService.stop(reason: 'failed'));
           _showTerminalStateThenClose('Call failed');
           return;
         case 'call_timeout':
-          _stopRingToneLoop();
+          unawaited(OutgoingRingbackService.stop(reason: 'timeout'));
           _showTerminalStateThenClose('Call timed out');
           return;
         case 'call_ended':
           if (kDebugMode && defaultTargetPlatform == TargetPlatform.iOS) {
             debugPrint('[callkit-ios] call ended reason=${payload['reason'] ?? 'ended'}');
           }
-          _stopRingToneLoop();
+          unawaited(OutgoingRingbackService.stop(reason: 'ended'));
           _showTerminalStateThenClose('Call ended');
           return;
         case 'call_remote_ringing':
@@ -172,7 +174,7 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
                 _statusLine = null;
               }
             });
-            _syncRingToneLoop();
+            _syncOutgoingRingback();
           }
           return;
         case 'call_accepted':
@@ -181,11 +183,17 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
               _peerAccepted = true;
               _statusLine = null;
             });
-            _syncRingToneLoop();
+            _syncOutgoingRingback();
+            unawaited(
+              IncomingCallKitCoordinator.notifyOutgoingCallConnectedIfManaged(_s.callId),
+            );
           }
           return;
         case 'remote_user_joined':
-          _stopRingToneLoop();
+          unawaited(OutgoingRingbackService.stop(reason: 'remote_joined'));
+          unawaited(
+            IncomingCallKitCoordinator.notifyOutgoingCallConnectedIfManaged(_s.callId),
+          );
           return;
         default:
           return;
@@ -252,7 +260,7 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
         _statusLine = null;
       }
     });
-    _syncRingToneLoop();
+    _syncOutgoingRingback();
     await _engineLifecycleBarrier;
 
     final mic = await Permission.microphone.request();
@@ -263,7 +271,7 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
         _statusLine = 'Microphone permission denied';
       });
       _joinedRtc = false;
-      _syncRingToneLoop();
+      _syncOutgoingRingback();
       return;
     }
 
@@ -290,7 +298,7 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
               _statusLine = null;
             }
           });
-          _syncRingToneLoop();
+          _syncOutgoingRingback();
           final eng = _engine;
           if (eng != null) {
             unawaited(_safeSetSpeakerphone(eng, _speakerOn));
@@ -301,9 +309,13 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
           setState(() {
             _remoteJoined = true;
             _statusLine = null;
+            _connectedAt ??= DateTime.now();
           });
           _startCallTimer();
-          _syncRingToneLoop();
+          _syncOutgoingRingback();
+          unawaited(
+            IncomingCallKitCoordinator.notifyOutgoingCallConnectedIfManaged(_s.callId),
+          );
         },
         onUserOffline: (connection, uid, reason) {
           if (!mounted) return;
@@ -312,7 +324,7 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
             _statusLine = 'Call ended';
           });
           _callTimer?.cancel();
-          _syncRingToneLoop();
+          _syncOutgoingRingback();
           unawaited(_leaveAndPop());
         },
         onLeaveChannel: (connection, stats) {
@@ -336,7 +348,7 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
             _connecting = false;
             _statusLine = 'Connection error ($err)';
           });
-          _syncRingToneLoop();
+          _syncOutgoingRingback();
         },
       ),
     );
@@ -393,16 +405,23 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
   }
 
   Future<void> _leaveAndPop() async {
-    _stopRingToneLoop();
+    _dismissNativeCallkitForThisCall();
+    await OutgoingRingbackService.stop(reason: 'leave_channel');
     await _teardownEngineOnce();
     if (Get.isRegistered<AgoraCallService>()) {
-      await Get.find<AgoraCallService>().endCall(_s.callId, reason: 'ended');
+      final secs = _connected ? _talkSecondsForEndApi() : null;
+      await Get.find<AgoraCallService>().endCall(
+        _s.callId,
+        reason: 'ended',
+        durationSeconds: secs,
+      );
     }
     _closeScreenOnce();
   }
 
   Future<void> _rejectOrDecline() async {
-    _stopRingToneLoop();
+    _dismissNativeCallkitForThisCall();
+    await OutgoingRingbackService.stop(reason: 'decline');
     if (Get.isRegistered<AgoraCallService>()) {
       await Get.find<AgoraCallService>().rejectCall(_s.callId);
     }
@@ -412,7 +431,8 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
   }
 
   Future<void> _endCall() async {
-    _stopRingToneLoop();
+    _dismissNativeCallkitForThisCall();
+    await OutgoingRingbackService.stop(reason: 'end_call');
     if (_isIncoming && !_pickedIncoming) {
       await _rejectOrDecline();
       return;
@@ -420,7 +440,12 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
     if (!_connected && !_isIncoming) {
       await Get.find<AgoraCallService>().endCall(_s.callId, reason: 'cancelled');
     } else {
-      await Get.find<AgoraCallService>().endCall(_s.callId, reason: 'ended');
+      final secs = _connected ? _talkSecondsForEndApi() : null;
+      await Get.find<AgoraCallService>().endCall(
+        _s.callId,
+        reason: 'ended',
+        durationSeconds: secs,
+      );
     }
     await _teardownEngineOnce();
     if (_engine == null) {
@@ -438,6 +463,7 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
 
   void _showTerminalStateThenClose(String message) {
     if (!mounted) return;
+    _dismissNativeCallkitForThisCall();
     setState(() {
       _connecting = false;
       _remoteJoined = false;
@@ -455,60 +481,47 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
       _connecting = true;
       _statusLine = null;
     });
-    _syncRingToneLoop();
+    _syncOutgoingRingback();
     if (kDebugMode && defaultTargetPlatform == TargetPlatform.iOS) {
       debugPrint('[callkit-ios] incoming accept flow start alreadyPosted=${_s.incomingAcceptAlreadyPosted}');
     }
-    if (!_s.incomingAcceptAlreadyPosted) {
-      try {
-        await Get.find<AgoraCallService>().acceptCall(_s.callId);
-        if (kDebugMode && defaultTargetPlatform == TargetPlatform.iOS) {
-          debugPrint('[callkit-ios] accept API success callId=${_s.callId}');
-        }
-      } catch (e) {
-        if (kDebugMode && defaultTargetPlatform == TargetPlatform.iOS) {
-          debugPrint('[callkit-ios] accept API failed (continuing to RTC) $e');
-        }
+    if (Get.isRegistered<AgoraCallService>()) {
+      final refreshed =
+          await Get.find<AgoraCallService>().refreshIncomingSessionFromAccept(_s);
+      if (refreshed != null && mounted) {
+        setState(() => _s = refreshed);
       }
-    } else if (kDebugMode && defaultTargetPlatform == TargetPlatform.iOS) {
-      debugPrint('[callkit-ios] accept API skipped (already posted from CallKit hydrate)');
+    }
+    if (!_s.hasRtcCredentials) {
+      if (mounted) {
+        _showTerminalStateThenClose('Could not connect call');
+      }
+      return;
     }
     if (defaultTargetPlatform == TargetPlatform.iOS) {
-      if (!IncomingCallKitCoordinator.isCallKitAudioSessionActive) {
-        for (var i = 0; i < 2; i++) {
-          if (IncomingCallKitCoordinator.isCallKitAudioSessionActive) break;
-          await Future<void>.delayed(const Duration(milliseconds: 120));
-        }
-        if (!IncomingCallKitCoordinator.isCallKitAudioSessionActive) {
-          await Future<void>.delayed(const Duration(milliseconds: 180));
-        }
-      }
-      if (kDebugMode) {
-        debugPrint(
-          '[callkit-ios] audio session active=${IncomingCallKitCoordinator.isCallKitAudioSessionActive}',
-        );
-      }
+      await IncomingCallKitCoordinator.waitForAudioSessionActivation();
     }
     await _runJoinFlow();
   }
 
-  void _syncRingToneLoop() {
-    // Keep an audible cue while ringing:
-    // - incoming before user accepts/rejects
-    // - outgoing until peer accepts or joins
-    final shouldPlay =
-        (_isIncoming && !_pickedIncoming) ||
-        (!_isIncoming && !_remoteJoined && !_peerAccepted);
-    if (!shouldPlay) {
-      unawaited(_stopRingToneLoop());
+  /// Caller-side ringback only ([assets/ring.wav]); receiver uses CallKit / system ringtone.
+  void _syncOutgoingRingback() {
+    if (_isIncoming) {
+      unawaited(OutgoingRingbackService.stop(reason: 'incoming_call_screen'));
       return;
     }
-    if (CallRingtoneService.isPlaying) return;
-    unawaited(CallRingtoneService.playLoop());
+    unawaited(
+      OutgoingRingbackService.syncFromAgoraCallScreen(
+        session: _s,
+        remoteJoined: _remoteJoined,
+        peerAccepted: _peerAccepted,
+        pickedIncoming: _pickedIncoming,
+      ),
+    );
   }
 
-  Future<void> _stopRingToneLoop() async {
-    await CallRingtoneService.stop();
+  void _dismissNativeCallkitForThisCall() {
+    unawaited(IncomingCallKitCoordinator.dismissForCallId(_s.callId));
   }
 
   @override
@@ -517,12 +530,20 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached) {
-      unawaited(_stopRingToneLoop());
+      unawaited(OutgoingRingbackService.stop(reason: 'app_background'));
       return;
     }
     if (state == AppLifecycleState.resumed) {
-      _syncRingToneLoop();
+      _syncOutgoingRingback();
     }
+  }
+
+  int _talkSecondsForEndApi() {
+    if (_connectedAt != null) {
+      final wall = DateTime.now().difference(_connectedAt!).inSeconds;
+      return wall > _elapsed.inSeconds ? wall : _elapsed.inSeconds;
+    }
+    return _elapsed.inSeconds;
   }
 
   void _startCallTimer() {
@@ -566,7 +587,8 @@ class _AgoraAudioCallScreenState extends State<AgoraAudioCallScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    unawaited(_stopRingToneLoop());
+    unawaited(OutgoingRingbackService.stop(reason: 'dispose'));
+    _dismissNativeCallkitForThisCall();
     _closeDelayTimer?.cancel();
     _sigSub?.cancel();
     _callTimer?.cancel();

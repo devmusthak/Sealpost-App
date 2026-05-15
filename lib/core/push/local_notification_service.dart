@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:get/get.dart';
 
+import '../../core/app_branding.dart';
 import '../../core/network/api_endpoints.dart';
 import '../../core/network/dio_client.dart';
 import '../../core/call/incoming_call_kit_coordinator.dart';
@@ -260,7 +261,9 @@ class LocalNotificationService {
         _onMailTap?.call(data);
       } else if (t == 'new_chat_message') {
         _onChatTap?.call(data);
-      } else if (IncomingCallPayload.isIncomingAudioCall(data)) {
+      } else if (t == 'missed_voice_call') {
+        _onChatTap?.call(data);
+      } else if (IncomingCallPayload.isIncomingCall(data)) {
         _onVoiceCallTap?.call(data);
       }
     } catch (e) {
@@ -283,6 +286,47 @@ class LocalNotificationService {
 
   static int _idForChatPeer(String peerId) => peerId.hashCode & 0x7fffffff;
 
+  /// Foreground Android banner for [missed_voice_call] (same tap routing as chat).
+  static Future<void> showMissedVoiceCallForeground(
+    Map<String, String> d, {
+    String? notificationTitle,
+    String? notificationBody,
+  }) async {
+    if (!_initialized) return;
+    final callId = (d['callId'] ?? '').trim();
+    if (callId.isEmpty) return;
+    final title = (notificationTitle ?? '').trim().isNotEmpty
+        ? notificationTitle!.trim()
+        : 'Missed voice call';
+    final body = (notificationBody ?? '').trim().isNotEmpty
+        ? notificationBody!.trim()
+        : _missedVoiceCallBodyFromData(d);
+    final payloadMap = Map<String, String>.from(d);
+    if (Get.isRegistered<AuthRepository>()) {
+      final active = Get.find<AuthRepository>().activeAccountId;
+      if (active != null && active.trim().isNotEmpty) {
+        payloadMap['accountId'] = active.trim();
+      }
+    }
+    await _plugin.show(
+      id: callId.hashCode & 0x7fffffff,
+      title: title,
+      body: body,
+      notificationDetails: _chatChannelDetails(
+        senderName: title,
+        preview: body,
+        isGroupConversation: false,
+      ),
+      payload: jsonEncode(payloadMap),
+    );
+  }
+
+  static String _missedVoiceCallBodyFromData(Map<String, String> d) {
+    final name = (d['callerName'] ?? '').trim();
+    if (name.isEmpty) return 'Someone tried to call you';
+    return '$name tried to call you';
+  }
+
   /// Shows a local notification for FCM while the app is in the foreground on Android.
   /// Handles `new_mail` and test/other payloads that include a [RemoteMessage.notification].
   static Future<void> showForegroundRemoteMessage(RemoteMessage message) async {
@@ -304,7 +348,7 @@ class LocalNotificationService {
     final stringData = Map<String, String>.from(
       d.map((k, v) => MapEntry(k, '$v')),
     );
-    if (IncomingCallPayload.isIncomingAudioCall(stringData)) {
+    if (IncomingCallPayload.isIncomingCall(stringData)) {
       if (Get.isRegistered<AuthRepository>()) {
         final active = Get.find<AuthRepository>().activeAccountId;
         if (active != null && active.trim().isNotEmpty) {
@@ -398,7 +442,7 @@ class LocalNotificationService {
 
     await _plugin.show(
       id: id,
-      title: title.isEmpty ? 'Sealpost' : title,
+      title: title.isEmpty ? AppBranding.displayName : title,
       body: body.isEmpty ? '—' : body,
       notificationDetails: _mailChannelDetails,
       payload: jsonEncode(payloadMap),
@@ -530,7 +574,7 @@ class LocalNotificationService {
   static Future<void> _showChatGroupSummary() async {
     await _plugin.show(
       id: _chatGroupSummaryId,
-      title: 'Sealpost',
+      title: AppBranding.displayName,
       body: 'New chat messages',
       notificationDetails: _chatSummaryDetails,
       payload: jsonEncode(<String, String>{'type': 'new_chat_message'}),
@@ -760,7 +804,7 @@ class LocalNotificationService {
       final data = Map<String, String>.from(
         raw.map((k, v) => MapEntry(k.toString(), '${v ?? ''}')),
       );
-      if (!IncomingCallPayload.isIncomingAudioCall(data)) return;
+      if (!IncomingCallPayload.isIncomingCall(data)) return;
       final callId = (data['callId'] ?? '').trim();
       await cancelIncomingCallNotification(callId);
       if (actionId == _voiceCallRejectActionId) {
@@ -812,7 +856,7 @@ class LocalNotificationService {
     if (!_initialized) return;
     await _plugin.show(
       id: _chatReplyStatusNotificationId,
-      title: success ? 'Sealpost' : 'Sealpost',
+      title: AppBranding.displayName,
       body: message,
       notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(

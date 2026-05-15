@@ -6,6 +6,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../data/chat/chat_contact.dart';
+import '../../../theme/app_theme.dart';
 import '../../../data/chat/chat_media_repository.dart';
 import '../../../data/chat/chat_repository.dart';
 
@@ -140,9 +141,12 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF121212),
+      backgroundColor: Colors.black,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF202124),
+        backgroundColor: Colors.black,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
         foregroundColor: Colors.white,
         title: Text(widget.isEditMode ? 'Edit Group' : 'Create Group'),
       ),
@@ -183,7 +187,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                           borderSide: BorderSide(color: Colors.white24),
                         ),
                         focusedBorder: UnderlineInputBorder(
-                          borderSide: BorderSide(color: Color(0xFF53C5FF)),
+                          borderSide: BorderSide(color: kPrimaryBlue),
                         ),
                       ),
                     ),
@@ -203,7 +207,7 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                     borderSide: BorderSide(color: Colors.white24),
                   ),
                   focusedBorder: UnderlineInputBorder(
-                    borderSide: BorderSide(color: Color(0xFF53C5FF)),
+                    borderSide: BorderSide(color: kPrimaryBlue),
                   ),
                 ),
               ),
@@ -248,8 +252,8 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                       c.email,
                       style: TextStyle(color: Colors.white.withValues(alpha: 0.62)),
                     ),
-                    activeColor: const Color(0xFF53C5FF),
-                    checkColor: Colors.black,
+                    activeColor: kPrimaryBlue,
+                    checkColor: Colors.white,
                     controlAffinity: ListTileControlAffinity.trailing,
                   );
                 },
@@ -262,15 +266,20 @@ class _CreateGroupScreenState extends State<CreateGroupScreen> {
                 child: FilledButton(
                   onPressed: _busy ? null : _submitGroup,
                   style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF53C5FF),
-                    foregroundColor: Colors.black,
+                    backgroundColor: kPrimaryBlue,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: kPrimaryBlue.withValues(alpha: 0.5),
+                    disabledForegroundColor: Colors.white70,
                     minimumSize: const Size.fromHeight(46),
                   ),
                   child: _busy
                       ? const SizedBox(
                           width: 20,
                           height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
                         )
                       : Text(widget.isEditMode ? 'Save Group' : 'Create Group'),
                 ),

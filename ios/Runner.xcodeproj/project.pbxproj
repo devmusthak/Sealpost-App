@@ -506,8 +506,10 @@
 				DEVELOPMENT_TEAM = PTTM8P8RF9;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Sealpost;
+				INFOPLIST_KEY_CFBundleDisplayName = LivConnect;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
+				INFOPLIST_KEY_NSCameraUsageDescription = "LivConnect uses the camera for video calls and to take photos in chat.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "LivConnect uses the microphone for voice and video calls and voice messages in chat.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -697,8 +699,10 @@
 				DEVELOPMENT_TEAM = PTTM8P8RF9;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Sealpost;
+				INFOPLIST_KEY_CFBundleDisplayName = LivConnect;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
+				INFOPLIST_KEY_NSCameraUsageDescription = "LivConnect uses the camera for video calls and to take photos in chat.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "LivConnect uses the microphone for voice and video calls and voice messages in chat.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -728,8 +732,10 @@
 				DEVELOPMENT_TEAM = PTTM8P8RF9;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = Sealpost;
+				INFOPLIST_KEY_CFBundleDisplayName = LivConnect;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
+				INFOPLIST_KEY_NSCameraUsageDescription = "LivConnect uses the camera for video calls and to take photos in chat.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "LivConnect uses the microphone for voice and video calls and voice messages in chat.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

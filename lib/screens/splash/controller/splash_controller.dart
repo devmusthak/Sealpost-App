@@ -1,5 +1,6 @@
 import 'package:get/get.dart';
 
+import '../../../core/app/startup_coordinator.dart';
 import '../../../data/auth/auth_repository.dart';
 import '../../login/view/login_view.dart';
 import '../../navigation/view/main_navigation_view.dart';
@@ -19,6 +20,9 @@ class SplashController extends GetxController {
     final repo = Get.find<AuthRepository>();
     final restored = await repo.restoreSession();
     if (restored) {
+      if (Get.isRegistered<StartupCoordinator>()) {
+        await Get.find<StartupCoordinator>().awaitHeavyReady;
+      }
       await repo.syncPresenceForActiveSession();
       Get.off(
         () => const MainNavigationScreen(),

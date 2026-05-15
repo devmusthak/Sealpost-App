@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:io';
+
 import 'package:app_links/app_links.dart';
 import 'package:dio/dio.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -7,7 +9,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'core/app_branding.dart';
+import 'core/app/startup_coordinator.dart';
 import 'core/call/agora_call_service.dart';
+import 'core/call/incoming_call_kit_coordinator.dart';
 import 'core/mailto/mailto_link_service.dart';
 import 'core/share/share_receive_service.dart';
 import 'core/push/pending_voice_call.dart';
@@ -17,6 +22,8 @@ import 'core/network/dio_client.dart';
 import 'data/auth/auth_repository.dart';
 import 'data/chat/chat_media_repository.dart';
 import 'data/chat/chat_repository.dart';
+import 'data/calls/calls_repository.dart';
+import 'screens/calls/calls_history_controller.dart';
 import 'screens/chat/chat_forward_opener.dart';
 import 'screens/chat/chat_forward_opener_impl.dart';
 import 'screens/chat/controller/chat_controller.dart';
@@ -28,15 +35,17 @@ import 'push/firebase_messaging_background.dart';
 import 'screens/splash/view/splash_view.dart';
 import 'theme/app_theme.dart';
 
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  if (Platform.isAndroid) {
+    IncomingCallKitCoordinator.registerAndroidCallKitContentChannelEarly();
+  }
   FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
   runApp(const SealpostApp());
 }
 
-Future<void> _bootstrapApp() async {
+/// Storage, HTTP, auth — enough for [SplashScreen] 
+Future<void> _bootstrapPhase1() async {
   final sessionStorage = await SessionStorage.create();
   final dio = createDio();
   dio.interceptors.add(AuthInterceptor());
@@ -48,8 +57,15 @@ Future<void> _bootstrapApp() async {
   );
   final accountManager = await AccountSessionManager().init();
   Get.put<AccountSessionManager>(accountManager, permanent: true);
+  Get.put<StartupCoordinator>(StartupCoordinator(), permanent: true);
+  Get.put(MailtoLinkService(Get.find<SessionStorage>()), permanent: true);
+}
+
+/// Repos, call stack, share — after first UI frame; see [StartupCoordinator].
+Future<void> _bootstrapHeavyServices() async {
   Get.put<MailRepository>(MailRepository(Get.find<Dio>()), permanent: true);
   Get.put<ChatRepository>(ChatRepository(Get.find<Dio>()), permanent: true);
+  Get.put<CallsRepository>(CallsRepository(Get.find<Dio>()), permanent: true);
   Get.put<ChatMediaRepository>(
     ChatMediaRepository(Get.find<Dio>()),
     permanent: true,
@@ -57,11 +73,14 @@ Future<void> _bootstrapApp() async {
   Get.lazyPut<ChatController>(() => ChatController(), fenix: true);
   Get.put<ChatForwardOpener>(ChatForwardOpenerImpl(), permanent: true);
   Get.put<AgoraCallService>(AgoraCallService(), permanent: true);
-  Get.put(MailtoLinkService(Get.find<SessionStorage>()), permanent: true);
+  Get.put(CallsHistoryController(), permanent: true);
   Get.put(ShareReceiveService(), permanent: true);
   Get.put(PendingMailNotification(), permanent: true);
   Get.put(PendingChatNotification(), permanent: true);
   Get.put(PendingVoiceCall(), permanent: true);
+  if (Platform.isAndroid) {
+    IncomingCallKitCoordinator.notifyAndroidCallKitDependenciesReady();
+  }
 }
 
 class SealpostApp extends StatefulWidget {
@@ -95,16 +114,24 @@ class _SealpostAppState extends State<SealpostApp> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    _fireAndForget(_runBootstrap());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _fireAndForget(_runBootstrap());
+    });
   }
 
   Future<void> _runBootstrap() async {
     try {
-      await _bootstrapApp();
+      await Future<void>.delayed(Duration.zero);
+      await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+      await _bootstrapPhase1();
       if (!mounted) return;
+      final coord = Get.find<StartupCoordinator>();
+      unawaited(coord.beginHeavyIfNeeded(_bootstrapHeavyServices));
       setState(() => _appReady = true);
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || _servicesAttached) return;
+        if (!mounted) return;
+        unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
+        if (_servicesAttached) return;
         _servicesAttached = true;
         WidgetsBinding.instance.addObserver(this);
         _fireAndForget(_initAppLinks());
@@ -240,13 +267,19 @@ class _SealpostAppState extends State<SealpostApp> with WidgetsBindingObserver {
     if (_bootstrapError != null) {
       return MaterialApp(
         debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          scaffoldBackgroundColor: kDarkBg,
+          useMaterial3: true,
+        ),
         home: Scaffold(
+          backgroundColor: kDarkBg,
           body: Center(
             child: Padding(
               padding: const EdgeInsets.all(24),
               child: Text(
                 'Could not start the app.\n$_bootstrapError',
                 textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70),
               ),
             ),
           ),
@@ -254,9 +287,16 @@ class _SealpostAppState extends State<SealpostApp> with WidgetsBindingObserver {
       );
     }
     if (!_appReady) {
-      return const MaterialApp(
+      return MaterialApp(
         debugShowCheckedModeBanner: false,
-        home: Scaffold(body: Center(child: CircularProgressIndicator())),
+        theme: ThemeData(
+          scaffoldBackgroundColor: kDarkBg,
+          useMaterial3: true,
+        ),
+        home: const Scaffold(
+          backgroundColor: kDarkBg,
+          body: SizedBox.expand(),
+        ),
       );
     }
 
@@ -274,7 +314,7 @@ class _SealpostAppState extends State<SealpostApp> with WidgetsBindingObserver {
       ),
     );
     return GetMaterialApp(
-      title: 'sealpost',
+      title: AppBranding.displayName,
       debugShowCheckedModeBanner: false,
       theme: baseTheme.copyWith(
         textTheme: GoogleFonts.ptSansTextTheme(baseTheme.textTheme),

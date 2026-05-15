@@ -6,8 +6,8 @@ import 'package:socket_io_client/socket_io_client.dart' as io;
 
 import '../../../core/call/agora_call_service.dart';
 import '../../../core/call/incoming_call_kit_coordinator.dart';
-import '../../../core/call/voice_call_navigation.dart';
 import '../../../core/network/api_endpoints.dart';
+import '../../../core/push/local_notification_service.dart';
 import '../../../data/auth/auth_repository.dart';
 import '../../../data/chat/chat_contact.dart';
 import '../../../data/chat/chat_repository.dart';
@@ -184,6 +184,10 @@ class ChatController extends GetxController {
       final id = '${map['callId'] ?? ''}'.trim();
       if (id.isNotEmpty) {
         unawaited(IncomingCallKitCoordinator.dismissForCallId(id));
+        unawaited(LocalNotificationService.cancelIncomingCallNotification(id));
+        if (Platform.isAndroid) {
+          IncomingCallKitCoordinator.androidFinalizeVoiceCallDismissal(id);
+        }
       }
     }
     if (Get.isRegistered<AgoraCallService>()) {
@@ -200,32 +204,29 @@ class ChatController extends GetxController {
       return;
     }
     _pipeCallEvent('call_ringing', map);
-    final selfId = (Get.find<AuthRepository>().userId ?? '').trim();
     unawaited(() async {
       try {
-        if (Platform.isIOS) {
+        if (Platform.isIOS || Platform.isAndroid) {
+          final callTypeRaw =
+              '${map['callType'] ?? map['mediaType'] ?? 'audio'}'.trim().toLowerCase();
+          final isVideo = callTypeRaw == 'video';
           final payload = <String, String>{
             ...map.map((k, v) => MapEntry(k.toString(), '$v')),
-            'type': 'incoming_voice_call',
+            'type': isVideo ? 'incoming_video_call' : 'incoming_voice_call',
             'notificationType': 'incoming_call',
-            'callType': 'audio',
+            'callType': isVideo ? 'video' : 'audio',
           };
           try {
             await IncomingCallKitCoordinator.presentFromFcmData(payload);
           } finally {
-            // Socket path claims UI to dedupe; CallKit is native UI only until Accept.
-            // Release so CallKit Accept can claim and open [AgoraAudioCallScreen].
+            // Socket path claims UI to dedupe; native incoming UI until Accept.
+            // Release so notification/CallKit Accept can claim and open in-app call UI.
             if (callId.isNotEmpty) {
               svc.releaseCallUi(callId);
             }
           }
           return;
         }
-        if (callId.isNotEmpty) {
-          await IncomingCallKitCoordinator.dismissNativeIfSameCall(callId);
-        }
-        final session = svc.sessionFromInvitePayload(map, selfUserId: selfId);
-        await openVoiceCallScreen(session: session);
       } catch (_) {
         if (callId.isNotEmpty) {
           svc.releaseCallUi(callId);

@@ -6,7 +6,7 @@ const Color kPrimaryBlue = Color(0xFF375DFB);
 
 const Color kDarkBg = Color(0xFF0D0D1B);
 
-/// Boldonse for the **SEALPOST** wordmark only (beside icon / under splash mark).
+/// Boldonse for the **LIVCONNECT** wordmark only (beside icon / under splash mark).
 TextStyle sealpostWordmarkStyle({
   required Color color,
   double fontSize = 20,

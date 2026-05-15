@@ -15,7 +15,7 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       message.data.map((k, v) => MapEntry(k, '$v')),
     );
     debugPrint(
-      "[fcm-ios] background handler messageId=${message.messageId} type=${d['type'] ?? ''} notificationType=${d['notificationType'] ?? ''} isCallEnded=${IncomingCallPayload.isVoiceCallEnded(d)} isIncomingCall=${IncomingCallPayload.isIncomingAudioCall(d)}",
+      "[fcm-ios] background handler messageId=${message.messageId} type=${d['type'] ?? ''} notificationType=${d['notificationType'] ?? ''} isCallEnded=${IncomingCallPayload.isVoiceCallEnded(d)} isIncomingCall=${IncomingCallPayload.isIncomingCall(d)}",
     );
   }
 
@@ -31,7 +31,18 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     return;
   }
 
-  if (IncomingCallPayload.isIncomingAudioCall(d)) {
+  if (IncomingCallPayload.isMissedVoiceCallNotification(d)) {
+    final id = (d['callId'] ?? '').trim();
+    if (id.isNotEmpty) {
+      await IncomingCallKitCoordinator.dismissForCallId(id);
+    }
+    if (kDebugMode) {
+      debugPrint('[missed-call] background isolate missed_voice_call callId=$id');
+    }
+    return;
+  }
+
+  if (IncomingCallPayload.isIncomingCall(d)) {
     await IncomingCallKitCoordinator.presentFromFcmData(d);
     return;
   }

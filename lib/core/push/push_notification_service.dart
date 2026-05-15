@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
@@ -78,6 +79,35 @@ class PendingChatNotification extends GetxController {
   }
 
   void applyFromData(Map<String, String> d) {
+    final t = (d['type'] ?? '').trim();
+    if (t == 'missed_voice_call') {
+      final peerId = (d['callerId'] ?? d['peerId'] ?? '').trim();
+      if (peerId.isEmpty) {
+        if (kDebugMode) {
+          debugPrint(
+            '[missed-call] skipped pending chat navigation reason=missing_callerId',
+          );
+        }
+        return;
+      }
+      final name = (d['callerName'] ?? '').trim();
+      final email = (d['fromEmail'] ?? '').trim();
+      contact = ChatContact(
+        id: peerId,
+        name: name.isNotEmpty ? name : (email.isNotEmpty ? email : 'Chat'),
+        email: email.isNotEmpty ? email : '',
+        isOnline: false,
+        lastSeenAt: null,
+        relationStatus: 'friends',
+        lastMessage: '',
+        timeLabel: '',
+        unreadCount: 0,
+        conversationType: 'direct',
+        groupId: null,
+        groupImage: '',
+      );
+      return;
+    }
     if (d['type'] != 'new_chat_message') return;
     final groupId = (d['groupId'] ?? '').trim();
     final isGroup =
@@ -183,20 +213,47 @@ class PushNotificationService {
         message.data.map((k, v) => MapEntry(k, '$v')),
       );
       final isCallEnded = IncomingCallPayload.isVoiceCallEnded(d);
-      final isIncomingCall = IncomingCallPayload.isIncomingAudioCall(d);
+      final isMissedCall = IncomingCallPayload.isMissedVoiceCallNotification(d);
+      final isIncomingCall = IncomingCallPayload.isIncomingCall(d);
 
       if (isIos && kDebugMode) {
         debugPrint(
           "[fcm-ios] onMessage type=${d['type'] ?? ''} notificationType=${d['notificationType'] ?? ''} "
-          "filter: isCallEnded=$isCallEnded isIncomingCall=$isIncomingCall",
+          "filter: isCallEnded=$isCallEnded isMissedCall=$isMissedCall isIncomingCall=$isIncomingCall",
         );
       }
 
       if (isCallEnded) {
         final id = (d['callId'] ?? '').trim();
         if (id.isNotEmpty) {
+          if (Platform.isAndroid) {
+            IncomingCallKitCoordinator.androidFinalizeVoiceCallDismissal(id);
+          }
           unawaited(IncomingCallKitCoordinator.dismissForCallId(id));
           unawaited(LocalNotificationService.cancelIncomingCallNotification(id));
+        }
+        return;
+      }
+      if (isMissedCall) {
+        final id = (d['callId'] ?? '').trim();
+        if (id.isNotEmpty) {
+          if (Platform.isAndroid) {
+            IncomingCallKitCoordinator.androidFinalizeVoiceCallDismissal(id);
+          }
+          unawaited(IncomingCallKitCoordinator.dismissForCallId(id));
+          unawaited(LocalNotificationService.cancelIncomingCallNotification(id));
+        }
+        if (Platform.isAndroid) {
+          unawaited(
+            LocalNotificationService.showMissedVoiceCallForeground(
+              d,
+              notificationTitle: message.notification?.title,
+              notificationBody: message.notification?.body,
+            ),
+          );
+        }
+        if (kDebugMode) {
+          debugPrint('[missed-call] foreground missed_voice_call callId=$id');
         }
         return;
       }
@@ -259,16 +316,35 @@ class PushNotificationService {
     if (IncomingCallPayload.isVoiceCallEnded(d)) {
       final id = (d['callId'] ?? '').trim();
       if (id.isNotEmpty) {
+        if (Platform.isAndroid) {
+          IncomingCallKitCoordinator.androidFinalizeVoiceCallDismissal(id);
+        }
         unawaited(IncomingCallKitCoordinator.dismissForCallId(id));
         unawaited(LocalNotificationService.cancelIncomingCallNotification(id));
       }
       return;
     }
-    if (IncomingCallPayload.isIncomingAudioCall(d)) {
+    if (IncomingCallPayload.isIncomingCall(d)) {
       Get.find<PendingVoiceCall>().applyFromData(
         IncomingCallPayload.normalizeInviteStrings(d),
       );
       openPendingIncomingVoiceCallIfReady();
+      return;
+    }
+    if (IncomingCallPayload.isMissedVoiceCallNotification(d)) {
+      final id = (d['callId'] ?? '').trim();
+      if (id.isNotEmpty) {
+        if (Platform.isAndroid) {
+          IncomingCallKitCoordinator.androidFinalizeVoiceCallDismissal(id);
+        }
+        unawaited(IncomingCallKitCoordinator.dismissForCallId(id));
+        unawaited(LocalNotificationService.cancelIncomingCallNotification(id));
+      }
+      Get.find<PendingChatNotification>().applyFromData(d);
+      tryNavigateToChatThread();
+      if (kDebugMode) {
+        debugPrint('[missed-call] opened from notification tap callId=$id');
+      }
       return;
     }
     if (d['type'] == 'new_chat_message') {

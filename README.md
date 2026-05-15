@@ -1,4 +1,4 @@
-# sealpost
+# LivConnect
 
 A new Flutter project.
 

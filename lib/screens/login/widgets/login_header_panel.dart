@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
+import '../../../core/app_branding.dart';
 import '../../../theme/app_theme.dart';
 import '../../../widgets/app_text.dart';
 import '../model/login_constants.dart';
@@ -49,14 +50,14 @@ class LoginHeaderPanel extends StatelessWidget {
                       mainAxisAlignment: MainAxisAlignment.center,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        SvgPicture.asset(
-                          'assets/logo.svg',
-                          width: 28,
-                          height: 28,
+                        Image.asset(
+                          'assets/logo.png',
+                          width: 40,
+                          height: 40,
                         ),
                         const SizedBox(width: 10),
                         Text(
-                          'SEALPOST',
+                          AppBranding.wordmark,
                           style: sealpostWordmarkStyle(
                             color: Colors.white,
                             fontSize: 20,
@@ -66,7 +67,7 @@ class LoginHeaderPanel extends StatelessWidget {
                     ),
                     const SizedBox(height: 20),
                     AppText(
-                      'Seal Your Email, Secure Your Business',
+                      'Connect Your Team, Secure Your Business',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 26,
@@ -76,7 +77,7 @@ class LoginHeaderPanel extends StatelessWidget {
                     ),
                     const SizedBox(height: 10),
                     AppText(
-                      "Sealpost is an enterprise-grade email hosting platform that empowers businesses to host and manage multiple company domains on a secure, self-hosted infrastructure.",
+                      "${AppBranding.displayName} is an enterprise-grade email and messaging platform that empowers businesses to host and manage multiple company domains on secure, self-hosted infrastructure.",
                       style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.85),
                         fontSize: 14,

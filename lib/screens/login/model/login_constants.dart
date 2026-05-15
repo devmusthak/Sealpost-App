@@ -2,7 +2,7 @@
 abstract final class LoginConstants {
   static const double headerHeightFraction = 0.35;
   static const double headerHorizontalPadding = 24;
-  static const String emailHint = 'mail@sealpost.com';
+  static const String emailHint = 'mail@livconnect.com';
   static const String passwordHint = 'Enter your password';
 
   /// Sent on login until Firebase Auth supplies a real UID (`''` clears stored uid server-side).

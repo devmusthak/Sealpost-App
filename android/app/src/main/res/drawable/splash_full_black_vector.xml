@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Full-bleed black vector for Android 12+ splash "icon" slot (replaces launcher icon). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="288dp"
+    android:height="288dp"
+    android:viewportWidth="288"
+    android:viewportHeight="288">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M0,0h288v288h-288z" />
+</vector>

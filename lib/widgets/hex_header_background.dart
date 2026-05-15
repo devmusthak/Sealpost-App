@@ -1,12 +1,8 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
-
-/// Base fill behind the hex grid (delete dialog + drawer brand band).
 const kHexHeaderBaseColor = Color(0xFF1E1E1E);
 
-/// Hex grid in the top band; pair with a gradient to [fadeToColor] underneath.
 class HexHeaderPainter extends CustomPainter {
   const HexHeaderPainter();
 
@@ -85,8 +81,8 @@ class SealpostLogoCircleBadge extends StatelessWidget {
         ],
       ),
       padding: EdgeInsets.all(logoPadding),
-      child: SvgPicture.asset(
-        'assets/logo.svg',
+      child: Image.asset(
+        'assets/logo.png',
         fit: BoxFit.contain,
       ),
     );

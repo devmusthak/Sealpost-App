@@ -5,11 +5,13 @@ import 'dart:math';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:get/get.dart';
 
+import '../app_branding.dart';
 import '../network/api_endpoints.dart';
 import '../network/dio_client.dart';
 import '../push/pending_voice_call.dart';
@@ -17,13 +19,13 @@ import '../../data/auth/auth_repository.dart';
 import '../../data/session/session_storage.dart';
 import '../../screens/home/controller/home_controller.dart';
 import 'agora_call_service.dart';
-import 'call_ringtone_service.dart';
 import 'incoming_call_payload.dart';
+import 'outgoing_ringback_service.dart';
 import 'voice_call_navigation.dart';
 
 /// WhatsApp-style incoming call UI via [flutter_callkit_incoming] + Agora for media.
 ///
-/// - Android: full-screen incoming UI, ringtone, Accept / Decline.
+/// - Android: CallKit incoming UI + system ringtone; outgoing ringback is [OutgoingRingbackService].
 /// - iOS: CallKit; true background/killed requires **VoIP push** (see AppDelegate + PUSHKIT.md).
 /// - FCM data push alone is not sufficient on iOS when the app is suspended; server must send VoIP.
 class IncomingCallKitCoordinator {
@@ -31,6 +33,10 @@ class IncomingCallKitCoordinator {
 
   static StreamSubscription<CallEvent?>? _eventSub;
   static bool _listenersAttached = false;
+  static const MethodChannel _androidCallKitContentChannel =
+      MethodChannel('com.sealpost.mail/call_kit_incoming');
+  static bool _androidCallKitContentHandlerAttached = false;
+  static Map<String, String>? _queuedAndroidCallKitContentTap;
   static final Map<String, String> _callKitIdByCallId = <String, String>{};
   static final Set<String> _presentedCallIds = <String>{};
   static final Map<String, DateTime> _ignoredEndedCallIds = <String, DateTime>{};
@@ -46,27 +52,89 @@ class IncomingCallKitCoordinator {
   static const Duration _ignoredCallTtl = Duration(minutes: 10);
   static const Duration _incomingCallMaxAge = Duration(seconds: 45);
 
+  /// Register before [runApp] so cold-start notification taps are not dropped.
+  static void registerAndroidCallKitContentChannelEarly() {
+    if (!Platform.isAndroid) return;
+    _attachAndroidCallKitContentChannelHandler();
+  }
+
+  /// Call after [PendingVoiceCall] is registered (e.g. end of app bootstrap).
+  static void notifyAndroidCallKitDependenciesReady() {
+    if (!Platform.isAndroid) return;
+    final q = _queuedAndroidCallKitContentTap;
+    if (q == null) return;
+    _queuedAndroidCallKitContentTap = null;
+    handleAndroidCallKitNotificationContent(q);
+  }
+
   /// Call after [WidgetsFlutterBinding] + plugin registration (e.g. from [PushNotificationService]).
   static void attachListeners() {
     if (_listenersAttached) return;
     _listenersAttached = true;
+    _attachAndroidCallKitContentChannelHandler();
     _eventSub = FlutterCallkitIncoming.onEvent.listen(_onCallKitEvent);
     unawaited(syncVoipTokenToServer());
+  }
+
+  static void _attachAndroidCallKitContentChannelHandler() {
+    if (!Platform.isAndroid || _androidCallKitContentHandlerAttached) return;
+    _androidCallKitContentHandlerAttached = true;
+    _androidCallKitContentChannel.setMethodCallHandler((call) async {
+      if (call.method != 'onCallKitNotificationContent') return;
+      final args = call.arguments;
+      if (args is! Map) return;
+      final raw = <String, String>{};
+      for (final e in args.entries) {
+        raw['${e.key}'] = '${e.value}';
+      }
+      handleAndroidCallKitNotificationContent(raw);
+    });
+  }
+
+  /// Android: [CallKitIncomingRouteActivity] forwards notification / full-screen tap payload.
+  static void handleAndroidCallKitNotificationContent(Map<String, String> raw) {
+    if (!Platform.isAndroid) return;
+    final cidEarly = (raw['callId'] ?? '').trim();
+    if (cidEarly.isNotEmpty && PendingVoiceCall.isAndroidCallTerminal(cidEarly)) {
+      return;
+    }
+    if (!IncomingCallPayload.isIncomingCall(raw)) return;
+    final normalized = IncomingCallPayload.normalizeInviteStrings(raw);
+    if (!Get.isRegistered<PendingVoiceCall>()) {
+      _queuedAndroidCallKitContentTap = Map<String, String>.from(normalized);
+      return;
+    }
+    final p = Get.find<PendingVoiceCall>();
+    p.applyFromData(normalized);
+    if (!p.hasPending) return;
+    final resolved = (p.payload!['callId'] ?? '').trim();
+    if (resolved.isNotEmpty && PendingVoiceCall.isAndroidCallTerminal(resolved)) {
+      return;
+    }
+    p.androidShowRingUi = true;
+    openPendingIncomingVoiceCallIfReady();
   }
 
   static void disposeListeners() {
     _eventSub?.cancel();
     _eventSub = null;
     _listenersAttached = false;
+    if (Platform.isAndroid && _androidCallKitContentHandlerAttached) {
+      _androidCallKitContentChannel.setMethodCallHandler(null);
+      _androidCallKitContentHandlerAttached = false;
+    }
   }
 
   static Future<void> presentFromFcmData(Map<String, String> data) async {
-    if (!IncomingCallPayload.isIncomingAudioCall(data)) return;
+    if (!IncomingCallPayload.isIncomingCall(data)) return;
     final merged = IncomingCallPayload.normalizeInviteStrings(data);
     final callId = (merged['callId'] ?? '').trim();
     if (callId.isEmpty) return;
     _cleanupIgnoredEndedCallIds();
     if (_ignoredEndedCallIds.containsKey(callId)) return;
+    if (Platform.isAndroid && PendingVoiceCall.isAndroidCallTerminal(callId)) {
+      return;
+    }
     if (_isLikelyStaleCallId(callId)) {
       _markCallAsEndedLocally(callId);
       return;
@@ -93,8 +161,12 @@ class IncomingCallKitCoordinator {
 
     final timeoutSec = int.tryParse((merged['timeoutSeconds'] ?? '').trim()) ?? 45;
     final durationMs = (timeoutSec * 1000).clamp(15000, 120000);
+    final isVideo = IncomingCallPayload.isIncomingVideoCall(merged);
     final name =
-        (merged['callerName'] ?? merged['fromName'] ?? 'Incoming call').trim();
+        (merged['callerName'] ?? merged['fromName'] ?? '').trim();
+    final displayName = name.isEmpty
+        ? (isVideo ? 'Incoming video call' : 'Incoming call')
+        : name;
     final handle =
         (merged['callerId'] ?? merged['fromUserId'] ?? merged['handle'] ?? '')
             .trim();
@@ -104,14 +176,18 @@ class IncomingCallKitCoordinator {
     );
     extra['callId'] = callId;
     extra['callKitId'] = callKitId;
+    extra['callType'] = isVideo ? 'video' : 'audio';
 
     final params = CallKitParams(
       id: callKitId,
-      nameCaller: name.isEmpty ? 'Incoming call' : name,
-      appName: 'Sealpost',
+      nameCaller: displayName,
+      appName: AppBranding.displayName,
       avatar: avatar.isEmpty ? null : avatar,
-      handle: handle,
-      type: 0,
+      // Android: plugin uses [handle] as the line under the name — show app name, not user id.
+      handle: Platform.isAndroid
+          ? (isVideo ? 'Incoming video call' : AppBranding.displayName)
+          : handle,
+      type: isVideo ? 1 : 0,
       duration: durationMs,
       textAccept: 'Accept',
       textDecline: 'Decline',
@@ -124,19 +200,20 @@ class IncomingCallKitCoordinator {
       extra: extra,
       android: AndroidParams(
         isCustomNotification: false,
+        isShowCallID: false,
         isShowFullLockedScreen: false,
         isImportant: true,
         ringtonePath: 'system_ringtone_default',
-        incomingCallNotificationChannelName: 'Sealpost incoming calls',
-        missedCallNotificationChannelName: 'Sealpost missed calls',
+        incomingCallNotificationChannelName: '${AppBranding.displayName} incoming calls',
+        missedCallNotificationChannelName: '${AppBranding.displayName} missed calls',
         backgroundColor: '#1a1a1a',
         actionColor: '#25D366',
         textColor: '#ffffff',
         isShowLogo: true,
       ),
-      ios: const IOSParams(
+      ios: IOSParams(
         handleType: 'generic',
-        supportsVideo: false,
+        supportsVideo: isVideo,
         ringtonePath: 'system_ringtone_default',
         audioSessionActive: true,
         audioSessionMode: 'default',
@@ -152,6 +229,145 @@ class IncomingCallKitCoordinator {
         return true;
       }());
     }
+  }
+
+  /// Native CallKit / Android calling UI for the **caller** while [AgoraAudioCallScreen] is shown.
+  /// Does not replace the Flutter ring screen — both run together until the call connects or ends.
+  static Future<void> startOutgoingCallkitIfSupported({
+    required VoiceCallSession session,
+  }) async {
+    if (session.isIncoming) return;
+    if (!Platform.isIOS && !Platform.isAndroid) return;
+    final callId = session.callId.trim();
+    if (callId.isEmpty) return;
+
+    attachListeners();
+
+    final callKitId = _callKitIdByCallId.putIfAbsent(
+      callId,
+      () => _isUuid(callId) ? callId : _newUuidV4(),
+    );
+
+    final isVideo = session.isVideo;
+    final calleeName =
+        session.peerName.trim().isEmpty ? 'Contact' : session.peerName.trim();
+
+    final extra = <String, dynamic>{
+      'callId': callId,
+      'callKitId': callKitId,
+      '_outgoingSealpostLocal': '1',
+      'channelName': session.channelName,
+      'token': session.token ?? '',
+      'uid': '${session.localUid}',
+      'appId': session.effectiveAppId,
+      'callerId': session.callerId,
+      'receiverId': session.receiverId,
+      'peerUserId': session.peerUserId,
+      'conversationId': session.conversationId ?? '',
+      'callType': isVideo ? 'video' : 'audio',
+      'type': isVideo ? 'outgoing_video_call' : 'outgoing_voice_call',
+      'notificationType': 'outgoing_call',
+    };
+
+    final params = CallKitParams(
+      id: callKitId,
+      nameCaller: calleeName,
+      appName: AppBranding.displayName,
+      // Android: second line under callee name — app label (ids stay in [extra]).
+      handle: isVideo ? 'Video call' : AppBranding.displayName,
+      type: isVideo ? 1 : 0,
+      duration: 120000,
+      callingNotification: const NotificationParams(
+        showNotification: true,
+        isShowCallback: true,
+        subtitle: 'Calling…',
+        callbackText: 'Cancel',
+      ),
+      missedCallNotification: const NotificationParams(
+        showNotification: true,
+        isShowCallback: false,
+        subtitle: 'Missed call',
+        callbackText: 'Call back',
+      ),
+      extra: extra,
+      android: const AndroidParams(
+        isCustomNotification: true,
+        isShowCallID: false,
+        isShowFullLockedScreen: false,
+        isImportant: true,
+        ringtonePath: 'system_ringtone_default',
+        incomingCallNotificationChannelName: '${AppBranding.displayName} incoming calls',
+        missedCallNotificationChannelName: '${AppBranding.displayName} missed calls',
+        backgroundColor: '#1a1a1a',
+        actionColor: '#E11D48',
+        textColor: '#ffffff',
+        isShowLogo: true,
+      ),
+      ios: IOSParams(
+        handleType: 'generic',
+        supportsVideo: isVideo,
+        ringtonePath: 'system_ringtone_default',
+        audioSessionActive: true,
+        audioSessionMode: 'default',
+      ),
+    );
+
+    try {
+      await FlutterCallkitIncoming.startCall(params);
+      _presentedCallIds.add(callId);
+      if (kDebugMode) {
+        debugPrint(
+          '[callkit] startOutgoing callId=$callId nativeId=$callKitId callee=$calleeName',
+        );
+      }
+    } catch (e, st) {
+      assert(() {
+        FlutterError.reportError(FlutterErrorDetails(exception: e, stack: st));
+        return true;
+      }());
+    }
+  }
+
+  /// Updates native CallKit / Telecom state when media path is up (outgoing or mirrored UI).
+  static Future<void> notifyOutgoingCallConnectedIfManaged(String callId) async {
+    final id = callId.trim();
+    if (id.isEmpty) return;
+    final mapped = _callKitIdByCallId[id]?.trim();
+    if (mapped == null || mapped.isEmpty) return;
+    try {
+      await FlutterCallkitIncoming.setCallConnected(mapped);
+      if (kDebugMode) {
+        debugPrint('[callkit] setCallConnected callId=$id nativeId=$mapped');
+      }
+    } catch (_) {}
+  }
+
+  static bool _isOutgoingLocalCallkit(dynamic body) {
+    if (body is! Map) return false;
+    final m = Map<String, dynamic>.from(body);
+    dynamic ex = m['extra'];
+    if (ex is String && ex.trim().isNotEmpty) {
+      try {
+        final d = jsonDecode(ex);
+        if (d is Map) ex = d;
+      } catch (_) {}
+    }
+    if (ex is Map && '${ex['_outgoingSealpostLocal'] ?? ''}' == '1') {
+      return true;
+    }
+    return false;
+  }
+
+  static void _emitCallEndedToActiveUiIfNeeded(String callId) {
+    final id = callId.trim();
+    if (id.isEmpty) return;
+    if (!Get.isRegistered<AgoraCallService>()) return;
+    final svc = Get.find<AgoraCallService>();
+    if (svc.activeUiCallId != id) return;
+    svc.emitCallSignal('call_ended', <String, dynamic>{
+      'callId': id,
+      'reason': 'callkit_native',
+    });
   }
 
   static Future<void> dismissForCallId(String callId) async {
@@ -220,7 +436,7 @@ class IncomingCallKitCoordinator {
         'rationaleMessagePermission':
             'Incoming calls need notification permission to ring and show Accept / Decline.',
         'postNotificationMessageRequired':
-            'Please allow notifications so Sealpost can show incoming calls.',
+            'Please allow notifications so ${AppBranding.displayName} can show incoming calls.',
       });
     } catch (_) {}
     try {
@@ -356,7 +572,7 @@ class IncomingCallKitCoordinator {
     final ch = (invite['channelName'] ?? '').trim();
     final tok = (invite['token'] ?? '').trim();
     final uid = int.tryParse((invite['uid'] ?? '').trim()) ?? -1;
-    return ch.isNotEmpty && tok.isNotEmpty && uid >= 0;
+    return ch.isNotEmpty && tok.isNotEmpty && uid > 0;
   }
 
   static bool _inviteRtcReadyForSession(Map<String, String> invite) {
@@ -372,11 +588,17 @@ class IncomingCallKitCoordinator {
   }
 
   static Map<String, String> _minimalInviteForCallId(String callId) {
+    var callType = 'audio';
+    if (Get.isRegistered<PendingVoiceCall>()) {
+      final pending = Get.find<PendingVoiceCall>().payload;
+      final ct = (pending?['callType'] ?? '').trim().toLowerCase();
+      if (ct == 'video') callType = 'video';
+    }
     return IncomingCallPayload.normalizeInviteStrings({
       'callId': callId.trim(),
-      'type': 'incoming_voice_call',
+      'type': callType == 'video' ? 'incoming_video_call' : 'incoming_voice_call',
       'notificationType': 'incoming_call',
-      'callType': 'audio',
+      'callType': callType,
     });
   }
 
@@ -458,6 +680,13 @@ class IncomingCallKitCoordinator {
         // User tapped the CallKit incoming banner/screen; open app call UI promptly.
         unawaited(_handleIncoming(event.body));
         break;
+      case Event.actionCallStart:
+        if (_isOutgoingLocalCallkit(event.body)) {
+          if (kDebugMode) {
+            debugPrint('[callkit] Event.actionCallStart ignored (outgoing local)');
+          }
+        }
+        break;
       case Event.actionDidUpdateDevicePushTokenVoip:
         unawaited(syncVoipTokenToServer());
         break;
@@ -495,11 +724,15 @@ class IncomingCallKitCoordinator {
     if (invite == null) return;
     if (!Get.isRegistered<PendingVoiceCall>()) return;
     Get.find<PendingVoiceCall>().applyFromData(invite);
+    if (Platform.isAndroid) {
+      clearPendingIncomingVoiceNavigation();
+      return;
+    }
     openPendingIncomingVoiceCallIfReady();
   }
 
   static Future<void> _handleAccept(dynamic body) async {
-    await CallRingtoneService.stop();
+    await OutgoingRingbackService.stop(reason: 'callkit_accept');
     if (kDebugMode && Platform.isIOS) {
       debugPrint('[callkit-ios] Event.actionCallAccept body=$body');
     }
@@ -524,18 +757,6 @@ class IncomingCallKitCoordinator {
     if (callId.isNotEmpty && _acceptHandledCallIds.contains(callId)) {
       if (kDebugMode && Platform.isIOS) {
         debugPrint('[callkit-ios] accept duplicate suppressed callId=$callId');
-      }
-      return;
-    }
-
-    await _hydrateInviteFromAcceptIfNeeded(invite, callId);
-    if (!_inviteRtcReadyForSession(invite)) {
-      if (kDebugMode && Platform.isIOS) {
-        debugPrint(
-          '[callkit-ios] accept: still incomplete after hydrate callId=$callId '
-          'channel=${(invite['channelName'] ?? '').isNotEmpty} token=${(invite['token'] ?? '').isNotEmpty} '
-          'uid=${invite['uid']}',
-        );
       }
       return;
     }
@@ -567,7 +788,7 @@ class IncomingCallKitCoordinator {
   }
 
   static Future<void> _handleDecline(dynamic body) async {
-    await CallRingtoneService.stop();
+    await OutgoingRingbackService.stop(reason: 'callkit_decline');
     final invite = _parseEventToInvite(body);
     final callId = (invite?['callId'] ?? _callIdFromBody(body) ?? '').trim();
     if (callId.isNotEmpty) {
@@ -575,28 +796,59 @@ class IncomingCallKitCoordinator {
     }
     await dismissForCallId(callId);
     await _rejectViaRest(callId);
+    if (Platform.isAndroid) {
+      androidFinalizeVoiceCallDismissal(callId);
+    }
   }
 
   static Future<void> _handleTimeout(dynamic body) async {
-    await CallRingtoneService.stop();
+    await OutgoingRingbackService.stop(reason: 'callkit_timeout');
     final callId = (_callIdFromBody(body) ?? '').trim();
     if (callId.isNotEmpty) {
       _acceptHandledCallIds.remove(callId);
     }
     await dismissForCallId(callId);
     await _endViaRest(callId, reason: 'missed');
+    if (Platform.isAndroid) {
+      androidFinalizeVoiceCallDismissal(callId);
+    }
   }
 
   static Future<void> _handleEnded(dynamic body) async {
-    await CallRingtoneService.stop();
+    await OutgoingRingbackService.stop(reason: 'callkit_ended');
     final callId = (_callIdFromBody(body) ?? '').trim();
     if (callId.isNotEmpty) {
       _acceptHandledCallIds.remove(callId);
     }
-    // iOS ACTION_CALL_ENDED is emitted after native CallKit already ended the call.
-    // Calling endCall() again can trigger CallKit request transaction errors.
+    if (callId.isEmpty) {
+      _clearCallTracking(callId);
+      await _endViaRest(callId, reason: 'ended');
+      if (Platform.isAndroid) {
+        androidFinalizeVoiceCallDismissal(callId);
+      }
+      return;
+    }
+    await dismissForCallId(callId);
+    _emitCallEndedToActiveUiIfNeeded(callId);
     _clearCallTracking(callId);
     await _endViaRest(callId, reason: 'ended');
+    if (Platform.isAndroid) {
+      androidFinalizeVoiceCallDismissal(callId);
+    }
+  }
+
+  /// Android: after Decline/End/Timeout from CallKit, or remote call end over socket/FCM —
+  /// drop stale pending + nav retries so reopening the app does not show the accept screen.
+  static void androidFinalizeVoiceCallDismissal(String callId) {
+    if (!Platform.isAndroid) return;
+    final id = callId.trim();
+    if (id.isNotEmpty) {
+      PendingVoiceCall.markAndroidCallTerminal(id);
+    }
+    if (Get.isRegistered<PendingVoiceCall>()) {
+      Get.find<PendingVoiceCall>().clear();
+    }
+    clearPendingIncomingVoiceNavigation();
   }
 
   static void _markCallAsEndedLocally(String callId) {

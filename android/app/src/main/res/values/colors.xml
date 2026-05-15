@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Native window / splash only — pure black (Flutter splash uses its own [kDarkBg]). -->
+    <color name="launch_brand">#FF000000</color>
+</resources>

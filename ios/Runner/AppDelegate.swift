@@ -183,11 +183,17 @@ import flutter_callkit_incoming
     let callKitIdCandidate = (dict["callKitId"] as? String) ?? (dict["uuid"] as? String) ?? ""
     let callKitId = UUID(uuidString: callKitIdCandidate) != nil ? callKitIdCandidate : UUID().uuidString
 
+    let callTypeRaw = (
+      (dict["callType"] as? String) ??
+      (dict["mediaType"] as? String) ??
+      ""
+    ).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let isVideo = callTypeRaw == "video" || (dict["isVideo"] as? Bool == true)
+
     let nameCaller =
-      (dict["callerName"] as? String) ?? (dict["nameCaller"] as? String) ?? "Incoming call"
+      (dict["callerName"] as? String) ?? (dict["nameCaller"] as? String) ?? (isVideo ? "Incoming video call" : "Incoming call")
     let handle =
-      (dict["callerId"] as? String) ?? (dict["handle"] as? String) ?? ""
-    let isVideo = dict["isVideo"] as? Bool ?? false
+      (dict["callerId"] as? String) ?? (dict["handle"] as? String) ?? (isVideo ? "Incoming video call" : "LivConnect")
 
     let data = flutter_callkit_incoming.Data(
       id: callKitId,
@@ -195,7 +201,7 @@ import flutter_callkit_incoming
       handle: handle,
       type: isVideo ? 1 : 0
     )
-    data.appName = "Sealpost"
+    data.appName = "LivConnect"
     data.supportsVideo = isVideo
     if let avatar = (dict["callerAvatar"] as? String) ?? (dict["avatar"] as? String) {
       data.avatar = avatar
@@ -217,7 +223,9 @@ import flutter_callkit_incoming
     }
     extraStrings["callId"] = callId
     extraStrings["callKitId"] = callKitId
-    extraStrings["type"] = "incoming_voice_call"
+    extraStrings["callType"] = isVideo ? "video" : "audio"
+    extraStrings["type"] = isVideo ? "incoming_video_call" : "incoming_voice_call"
+    extraStrings["notificationType"] = "incoming_call"
     data.extra = extraStrings as NSDictionary
 
     return data
@@ -250,7 +258,9 @@ import flutter_callkit_incoming
     let event = String(describing: root["event"] ?? "").lowercased()
     let category = String(describing: root["category"] ?? "").lowercased()
     let kindValues = [type, notificationType, event, category]
-    if kindValues.contains("incoming_call") || kindValues.contains("incoming_voice_call") {
+    if kindValues.contains("incoming_call") ||
+      kindValues.contains("incoming_voice_call") ||
+      kindValues.contains("incoming_video_call") {
       return .incomingCall
     }
     return .normal

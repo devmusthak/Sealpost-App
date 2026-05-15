@@ -41,10 +41,21 @@ post_install do |installer|
     flutter_additional_ios_build_settings(target)
     target.build_configurations.each do |config|
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '18.0'
-      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
-        '$(inherited)',
-        'PERMISSION_MICROPHONE=1',
-      ]
+      # Append macros even when flutter_additional_ios_build_settings already set definitions.
+      definitions = config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] || ['$(inherited)']
+      definitions = [definitions] unless definitions.is_a?(Array)
+      %w[PERMISSION_MICROPHONE=1 PERMISSION_CAMERA=1].each do |macro|
+        definitions << macro unless definitions.include?(macro)
+      end
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = definitions
+      # dSYM for Pod targets built from source (Flutter/Firebase/etc.). Vendored prebuilt
+      # binaries (e.g. Agora *.xcframework) ship without DWARF — App Store Connect may list
+      # "Upload Symbols Failed" for those UUIDs; that is expected and does not block review.
+      # AgoraRtcKit arm64 UUID is baked into the binary; Apple cannot symbolicate Agora frames
+      # without dSYMs from Agora (CocoaPods package does not include them).
+      if config.name == 'Release' || config.name == 'Profile'
+        config.build_settings['DEBUG_INFORMATION_FORMAT'] = 'dwarf-with-dsym'
+      end
     end
   end
 end

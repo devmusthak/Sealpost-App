@@ -1,10 +1,10 @@
-/// Email-related Terms of Service for Sealpost (minimum length requirement: 5000+ characters).
+/// Email-related Terms of Service for LivConnect (minimum length requirement: 5000+ characters).
 const String kTermsOfServiceFullText = '''
-SEALPOST TERMS OF SERVICE
+LIVCONNECT TERMS OF SERVICE
 
 Last updated: April 1, 2026
 
-These Terms of Service ("Terms") govern your access to and use of Sealpost, an enterprise-grade email hosting and messaging platform ("Service") operated by Sealpost ("we", "us", or "our"). By creating an account, accessing mailboxes, sending or receiving email through our infrastructure, or otherwise using the Service, you agree to be bound by these Terms. If you are accepting on behalf of a company or other legal entity, you represent that you have authority to bind that entity. If you do not agree, do not use the Service.
+These Terms of Service ("Terms") govern your access to and use of LivConnect, an enterprise-grade email hosting and messaging platform ("Service") operated by LivConnect ("we", "us", or "our"). By creating an account, accessing mailboxes, sending or receiving email through our infrastructure, or otherwise using the Service, you agree to be bound by these Terms. If you are accepting on behalf of a company or other legal entity, you represent that you have authority to bind that entity. If you do not agree, do not use the Service.
 
 1. ELIGIBILITY AND ACCOUNTS
 You must provide accurate registration information, including a valid administrative contact and, where applicable, domain ownership or authorization to configure DNS for email routing. You are responsible for all activity under your credentials. You must promptly notify us of unauthorized access. We may suspend or terminate accounts that violate these Terms, pose a security risk, or are used in connection with unlawful, abusive, or fraudulent email practices.
@@ -40,7 +40,7 @@ To the maximum extent permitted by law, we disclaim indirect, incidental, specia
 You will defend and indemnify us against claims arising from your use of the Service, your content, your violation of these Terms, or your violation of third-party rights, including claims related to email content you send or domains you operate.
 
 12. GOVERNING LAW AND DISPUTES
-These Terms are governed by the laws specified in your enterprise agreement, or otherwise by the laws of the jurisdiction where Sealpost is established, excluding conflict-of-law rules. Courts in those jurisdictions have exclusive jurisdiction unless mandatory consumer protections apply.
+These Terms are governed by the laws specified in your enterprise agreement, or otherwise by the laws of the jurisdiction where LivConnect is established, excluding conflict-of-law rules. Courts in those jurisdictions have exclusive jurisdiction unless mandatory consumer protections apply.
 
 13. CHANGES
 We may modify these Terms by posting an updated version and, where material, notifying you by email or in-product notice. Continued use after the effective date constitutes acceptance.
@@ -63,10 +63,10 @@ The Service may include filtering for malware and phishing. False positives may 
 
 Enterprise customers may receive custom terms that prevail over these Terms where explicitly stated. In case of conflict, the enterprise agreement controls for those customers.
 
-By using Sealpost for business email, you confirm that you understand the shared responsibility model: we secure the platform; you secure accounts, clients, and content policy. This division is essential for regulatory frameworks that address both processor and controller obligations in email contexts.
+By using LivConnect for business email, you confirm that you understand the shared responsibility model: we secure the platform; you secure accounts, clients, and content policy. This division is essential for regulatory frameworks that address both processor and controller obligations in email contexts.
 
 These Terms will survive termination to the extent necessary to enforce accrued rights, confidentiality, indemnity, limitation of liability, and dispute resolution provisions.
 
-Thank you for choosing Sealpost for secure, professional email hosting. We are committed to reliable delivery, transparent policies, and continuous improvement of our email infrastructure while respecting your rights and applicable regulations.
+Thank you for choosing LivConnect for secure, professional email hosting. We are committed to reliable delivery, transparent policies, and continuous improvement of our email infrastructure while respecting your rights and applicable regulations.
 
 ''';

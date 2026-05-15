@@ -7,10 +7,14 @@ import 'package:get/get.dart';
 import '../../../core/call/incoming_call_kit_coordinator.dart';
 import '../../../core/push/push_notification_service.dart';
 import '../../../core/share/share_receive_service.dart';
+import '../../../features/calendar/controller/calendar_controller.dart';
+import '../../../features/calendar/view/calendar_screen.dart';
 import '../../chat/controller/chat_controller.dart';
 import '../../chat/view/chat_view.dart';
 import '../../home/controller/home_controller.dart';
 import '../../home/view/home_view.dart';
+import '../../calls/calls_history_controller.dart';
+import '../../calls/calls_screen.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   const MainNavigationScreen({super.key});
@@ -22,12 +26,9 @@ class MainNavigationScreen extends StatefulWidget {
 class _MainNavigationScreenState extends State<MainNavigationScreen>
     with WidgetsBindingObserver {
   int _selectedIndex = 0;
-    static const _navBackground = Color(0xFF121212);
+  static const _navBackground = Color(0xFF121212);
 
-  late final List<Widget> _tabs = const [
-    HomeScreen(),
-    ChatScreen(),
-  ];
+  late final List<Widget> _pages;
 
   Worker? _shareTabWorker;
   Timer? _acceptedSyncTimer;
@@ -36,6 +37,15 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   @override
   void initState() {
     super.initState();
+    if (!Get.isRegistered<CalendarController>()) {
+      Get.put(CalendarController(), permanent: true);
+    }
+    _pages = [
+      const HomeScreen(),
+      const ChatScreen(),
+      const CallsScreen(),
+      const CalendarScreen(),
+    ];
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // iOS stability: defer push/callkit listener bootstrap until main navigation
@@ -73,7 +83,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   }
 
   void _scheduleAcceptedCallSync() {
-    if (!Platform.isIOS) return;
+    if (!Platform.isIOS && !Platform.isAndroid) return;
     if (_acceptedSyncInFlight) return;
     _acceptedSyncTimer?.cancel();
     _acceptedSyncTimer = Timer(const Duration(milliseconds: 900), () async {
@@ -91,7 +101,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(index: _selectedIndex, children: _tabs),
+      body: IndexedStack(index: _selectedIndex, children: _pages),
       bottomNavigationBar: DecoratedBox(
         decoration: const BoxDecoration(color: _navBackground),
         child: Obx(() {
@@ -129,6 +139,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
                 setState(() {
                   _selectedIndex = index;
                 });
+                if (index == 2 && Get.isRegistered<CallsHistoryController>()) {
+                  unawaited(Get.find<CallsHistoryController>().refresh(silent: true));
+                }
               },
               destinations: [
                 NavigationDestination(
@@ -140,6 +153,16 @@ class _MainNavigationScreenState extends State<MainNavigationScreen>
                   icon: _TabIconBadge(icon: Icons.chat_bubble_outline, count: chatUnread),
                   selectedIcon: _TabIconBadge(icon: Icons.chat_bubble, count: chatUnread),
                   label: 'Chat',
+                ),
+                const NavigationDestination(
+                  icon: Icon(Icons.call_outlined),
+                  selectedIcon: Icon(Icons.call),
+                  label: 'Calls',
+                ),
+                const NavigationDestination(
+                  icon: Icon(Icons.calendar_today_outlined),
+                  selectedIcon: Icon(Icons.calendar_today),
+                  label: 'Reminder',
                 ),
               ],
             ),

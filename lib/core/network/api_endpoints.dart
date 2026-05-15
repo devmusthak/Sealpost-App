@@ -5,12 +5,16 @@ abstract final class ApiEndpoints {
     if (fromEnv.isNotEmpty) {
       return fromEnv.endsWith('/') ? fromEnv : '$fromEnv/';
     }
-    // return 'https://mail.livera.ae/';
-    // return 'http://192.168.1.6:4999/';
-    return 'http://172.17.179.249:4999/';
+    return 'https://mail.livera.ae/'; 
+    // return 'http://192.168.220.38:4999/';
   }
 
   static const String health = '/health';
+
+  static String get appUpdateBroadcastUrl {
+    final b = baseUrl;
+    return b.endsWith('/') ? '${b}update' : '$b/update';
+  }
 
   static const String authPrefix = '/api/auth';
   static const String login = '$authPrefix/login';
@@ -43,6 +47,7 @@ abstract final class ApiEndpoints {
   static const String voiceCallReject = '$chatPrefix/call/reject';
   static const String voiceCallEnd = '$chatPrefix/call/end';
   static const String voiceCallStatus = '$chatPrefix/call/status';
+  static const String chatCallHistory = '$chatPrefix/call/history';
   static const String chatGroupInvites = '$chatGroups/invites';
   static const String chatGroupInviteJoin = '$chatGroups/invite/join';
   static const String chatGroupMessages = '$chatGroups/messages';
